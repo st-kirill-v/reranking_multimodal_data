@@ -14,7 +14,8 @@ models/
 logs/              
 wandb/             
 mlruns/           
-*.log             
+*.log
+experiments/
 
 # Python кэш
 __pycache__/      
