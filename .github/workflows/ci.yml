@@ -21,6 +21,10 @@ jobs:
         run: |
           uv sync
 
+      - name: Explicitly install pre-commit
+        run: |
+          uv add pre-commit
+
       - name: Run pre-commit
         run: |
           uv run pre-commit run --all-files
