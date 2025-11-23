@@ -1,8 +1,19 @@
-﻿[project]
-name = "reranking-multimodal-data" 
+[project]
+name = "reranking-multimodal-data"
 version = "0.1.0"
+requires-python = ">=3.11"
 
 [project.optional-dependencies]
-dev = [
-    "pytest",
-]
+dev = ["pytest", "black"]
+
+[tool.black]
+line-length = 100
+target-version = ["py313"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E","F","I","B","W","UP","S","RUF"]
+ignore = []
