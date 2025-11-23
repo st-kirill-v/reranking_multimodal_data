@@ -1,45 +1,45 @@
-name: Debug CI
+﻿name: CI
 
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
 
 jobs:
-  debug:
+  test:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.11', '3.12', '3.13']
 
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - name: Install uv
-      uses: astral-sh/setup-uv@v3
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: '0.4.9'
 
-    - name: Step 1 - Install numpy
-      run: |
-        uv add numpy
-        echo "✅ numpy installed"
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python-version }}
 
-    - name: Step 2 - Install pandas
-      run: |
-        uv add pandas
-        echo "✅ pandas installed"
+      - name: Install dependencies
+        run: |
+          uv sync
 
-    - name: Step 3 - Install scikit-learn
-      run: |
-        uv add scikit-learn
-        echo "✅ scikit-learn installed"
+      - name: Run pre-commit
+        run: |
+          uv run pre-commit run --all-files
 
-    - name: Step 4 - Install pre-commit
-      run: |
-        uv add pre-commit
-        echo "✅ pre-commit installed"
+      - name: Run tests with coverage
+        run: |
+          uv run pytest -v --cov=./ --cov-report=xml
 
-    - name: Step 5 - Test pre-commit
-      run: |
-        uv run pre-commit --version
-        echo "✅ pre-commit works"
-
-    - name: Step 6 - Run pre-commit on all files
-      run: |
-        uv run pre-commit run --all-files
-        echo "✅ pre-commit passed"
+      - name: Upload coverage reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-reports
+          path: coverage.xml
