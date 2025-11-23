@@ -9,7 +9,7 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 10  # Увеличиваем таймаут
+    timeout-minutes: 10
 
     steps:
       - uses: actions/checkout@v4
@@ -17,9 +17,9 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v3
 
-      - name: Install ONLY DEV dependencies (без torch/transformers)
+      - name: Install DEV dependencies
         run: |
-          uv sync --dev-only
+          uv sync --dev
 
       - name: Run pre-commit
         run: |
