@@ -1,11 +1,11 @@
-name: CI with UV and Pre-commit
+name: Debug CI
 
 on:
   push:
     branches: [main]
 
 jobs:
-  test:
+  debug:
     runs-on: ubuntu-latest
     
     steps:
@@ -14,16 +14,32 @@ jobs:
     - name: Install uv
       uses: astral-sh/setup-uv@v3
     
-    - name: Install dependencies
+    - name: Step 1 - Install numpy
       run: |
-        uv add numpy pandas scikit-learn
-        uv add pre-commit black ruff
-        echo "✅ Dependencies installed"
+        uv add numpy
+        echo "✅ numpy installed"
     
-    - name: Run pre-commit
+    - name: Step 2 - Install pandas  
+      run: |
+        uv add pandas
+        echo "✅ pandas installed"
+    
+    - name: Step 3 - Install scikit-learn
+      run: |
+        uv add scikit-learn
+        echo "✅ scikit-learn installed"
+    
+    - name: Step 4 - Install pre-commit
+      run: |
+        uv add pre-commit
+        echo "✅ pre-commit installed"
+    
+    - name: Step 5 - Test pre-commit
+      run: |
+        uv run pre-commit --version
+        echo "✅ pre-commit works"
+    
+    - name: Step 6 - Run pre-commit on all files
       run: |
         uv run pre-commit run --all-files
-        echo "✅ Pre-commit passed"
-    
-    - name: Success
-      run: echo "🎉 FULL CI WITH PRE-COMMIT WORKS!"
+        echo "✅ pre-commit passed"
