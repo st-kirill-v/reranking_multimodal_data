@@ -19,14 +19,12 @@ dependencies = [
 ]
 [tool.ruff]
 line-length = 100
-target-version = "py313"
-extend-select = ["I"]  # isort в ruff
-ignore = ["E203"]      # совместимость с black по срезам
-fix = true
+target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E","F","I","B","W","UP","S","RUF"]
-ignore = []
+extend-select = ["I"]
+ignore = ["E203"]
 
 [tool.black]
 line-length = 100
