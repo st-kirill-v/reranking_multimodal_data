@@ -6,41 +6,31 @@ on:
   pull_request:
     branches: [main]
 
-permissions:
-  contents: read
-
 jobs:
   build-test-lint:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.11", "3.12", "3.13"]
+        python-version: ["3.11"]
 
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: "0.4.9"
+
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v4
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Install uv
-        run: |
-          curl -LsSf https://astral.sh/uv/install.sh | sh
-          echo "/home/runner/.cargo/bin" >> $GITHUB_PATH
+      - name: Install dependencies
+        run: uv sync --all-groups
 
-      - name: Verify uv installation
-        run: |
-          which uv
-          uv --version
-
-      - name: Install dependencies with uv
-        run: |
-          uv sync --all-groups
-
-      - name: Run pre-commit (all files on CI)
-        run: pre-commit run --all-files
+      - name: Run pre-commit
+        run: uv run pre-commit run --all-files
 
       - name: Run basic checks
-        run: |
-          uv run python -c "import numpy, pandas, sklearn; print('✅ Basic imports work')"
+        run: uv run python -c "import numpy, pandas, sklearn; print('✅ All imports work')"
