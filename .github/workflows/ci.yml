@@ -9,6 +9,7 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
 
     steps:
       - uses: actions/checkout@v4
@@ -16,7 +17,10 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v3
 
-      - name: Install pytest and run
+      - name: Install ONLY dev dependencies
         run: |
-          uv add pytest --dev
+          uv sync --dev
+
+      - name: Run tests
+        run: |
           uv run pytest tests/ -v
