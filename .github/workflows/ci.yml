@@ -1,4 +1,4 @@
-name: Minimal CI
+name: CI with UV
 
 on:
   push:
@@ -11,16 +11,17 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    - name: Install Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: "3.11"
+    - name: Install uv
+      uses: astral-sh/setup-uv@v3
 
-    - name: Install ONLY numpy (самая простая зависимость)
+    - name: Install basic dependencies
       run: |
-        python -m pip install --upgrade pip
-        pip install numpy
-        python -c "import numpy; print('✅ NUMPY WORKS!')"
+        uv add numpy pandas scikit-learn
+        echo "✅ Basic dependencies installed"
+
+    - name: Test imports
+      run: |
+        uv run python -c "import numpy, pandas, sklearn; print('✅ ALL IMPORTS WORK!')"
 
     - name: Success
-      run: echo "🎉 MINIMAL CI WORKS!"
+      run: echo "🎉 UV CI WORKS!"
