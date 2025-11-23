@@ -17,9 +17,10 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v3
 
-      - name: Install ONLY dev dependencies
+      - name: Install pytest explicitly
         run: |
-          uv sync --dev
+          uv add pytest --dev
+          uv run pytest --version
 
       - name: Run tests
         run: |
