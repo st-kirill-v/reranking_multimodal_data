@@ -1,131 +1,199 @@
-import numpy as np
-import faiss
-import json
-import os
-from sklearn.feature_extraction.text import TfidfVectorizer
-from typing import List, Dict, Any
+from src.core.module_manager import ModuleManager
+from src.core.modules.bm25_module import BM25Module
+from src.core.modules.fusion_modules import RRFusion, WeightedFusion
+from src.core.modules.router_modules import DebugRouter
+from typing import List, Dict, Any, Optional
 
 
-class SimpleTextRAG:
-    def __init__(self, storage_path: str = "data/indexes"):
-        self.storage_path = storage_path
-        os.makedirs(storage_path, exist_ok=True)
+class ModularRAG:
+    """Главный RAG движок с модульной архитектурой"""
 
-        # Инициализация компонентов
-        self.vectorizer = TfidfVectorizer(max_features=1024, stop_words="english", lowercase=True)
-        self.documents = []
-        self.doc_ids = []
-        self.is_fitted = False
-        # FAISS индекс
-        self.dimension = 1024
-        self.index = faiss.IndexFlatIP(self.dimension)
+    def __init__(self, storage_path: str = "data/modules"):
+        self.manager = ModuleManager(storage_path)
+        self._index_built = False
 
-    def add_documents(self, documents: List[str], ids: List[str] = None) -> Dict[str, Any]:
-        """Добавить документы в систему"""
-        if ids is None:
-            ids = [f"doc_{i}" for i in range(len(documents))]
+        # Инициализируем стандартные модули
+        self._init_default_modules()
 
-        # Добавляем документы
-        start_idx = len(self.documents)
-        self.documents.extend(documents)
-        self.doc_ids.extend(ids)
+        # Загружаем сохраненное состояние
+        self.manager.load_all()
 
-        # Переобучаем TF-IDF на всех документах
-        if self.documents:
-            tfidf_matrix = self.vectorizer.fit_transform(self.documents).toarray()
+    def _init_default_modules(self):
+        """
+        Умная инициализация модулей с SmartRouter
+        """
+        print("🚀 Инициализация модульной RAG системы...")
 
-            # Пересоздаем индекс с новыми размерами
-            self.index = faiss.IndexFlatIP(tfidf_matrix.shape[1])
+        # 1. BM25 модуль (основа)
+        from src.core.modules.bm25_module import BM25Module
 
-            # Добавляем все эмбеддинги
-            embeddings = tfidf_matrix.astype("float32")
-            self.index.add(embeddings)
-            self.is_fitted = True
+        bm25_module = BM25Module(name="bm25", language="multilingual")
+        self.manager.register_search_module(bm25_module, activate=True)
+        print("   ✅ BM25 модуль: загружен")
 
-            self._save_index()
+        # 2. Только RRF (без фиксированных весов)
+        from src.core.modules.fusion_modules import RRFusion
 
-        return {"status": "added", "count": len(documents)}
+        rrf = RRFusion()
+        self.manager.register_fusion_module("rrf", rrf, activate=True)
+        print("   ✅ Fusion модуль: RRF")
 
-    def search(self, query: str, n_results: int = 5) -> Dict[str, Any]:
-        """Поиск по документам"""
-        if not self.is_fitted or not self.documents:
-            return {"query": query, "results": []}
+        # 3. Умный роутер
+        from src.core.modules.router_modules import DebugRouter
 
-        # Преобразуем запрос в вектор
-        query_vector = self.vectorizer.transform([query]).toarray().astype("float32")
+        router = DebugRouter()
+        self.manager.register_router("smart", router, activate=True)
+        print("   ✅ Роутер: DebugRouter")
 
-        # Ищем в FAISS
-        distances, indices = self.index.search(query_vector, n_results)
+        print("\n🎯 Система готова!")
 
-        # Формируем результаты
-        results = []
-        for i, idx in enumerate(indices[0]):
-            if 0 <= idx < len(self.documents):
-                results.append(
-                    {
-                        "id": self.doc_ids[idx],
-                        "document": self.documents[idx],
-                        "score": float(distances[0][i]),
-                    }
-                )
+    def add_documents(self, documents: List[str], ids: Optional[List[str]] = None) -> Dict:
+        """Добавить документы"""
+        return self.manager.add_documents(documents, ids)
 
-        return {"query": query, "results": results}
+    def search(self, query: str, n_results: int = 5, strategy: str = "auto") -> Dict:
+        """Поиск"""
+        result = self.manager.search(query, n_results, strategy)
 
-    def get_info(self) -> Dict[str, Any]:
+        formatted_results = []
+        for doc in result["results"]:
+            formatted_results.append(
+                {
+                    "id": doc.get("id"),
+                    "document": doc.get("content", ""),
+                    "score": doc.get("fusion_score", doc.get("score", 0.0)),
+                }
+            )
+
+        return {"query": query, "results": formatted_results}
+
+    def get_info(self) -> Dict:
         """Информация о системе"""
-        return {
-            "total_documents": len(self.documents),
-            "is_fitted": self.is_fitted,
-            "embedding_dimension": self.dimension,
-        }
+        return self.manager.get_info()
 
-    def clear_documents(self) -> Dict[str, Any]:
+    def clear_documents(self) -> Dict:
         """Очистить все документы"""
-        self.vectorizer = TfidfVectorizer(max_features=1024, stop_words="english", lowercase=True)
-        self.index = faiss.IndexFlatIP(self.dimension)
-        self.documents = []
-        self.doc_ids = []
-        self.is_fitted = False
+        for name, module in self.manager.search_modules.items():
+            module.clear()
 
-        # Удаляем файлы индекса
-        index_files = ["index.faiss", "documents.json", "mapping.json"]
-        for file in index_files:
-            path = os.path.join(self.storage_path, file)
-            if os.path.exists(path):
-                os.remove(path)
-
+        self.manager.save_all()
         return {"status": "cleared"}
 
-    def _save_index(self):
-        """Сохранить индекс на диск"""
-        # Сохраняем FAISS индекс
-        faiss.write_index(self.index, os.path.join(self.storage_path, "index.faiss"))
+    def load_index(self) -> bool:
+        """Загрузить индекс"""
+        return self.manager.load_all()
 
-        # Сохраняем документы и маппинг
-        data = {"documents": self.documents, "doc_ids": self.doc_ids, "is_fitted": self.is_fitted}
+    def build_index(self) -> Dict[str, Any]:
+        """🔥 ИСПРАВЛЕННЫЙ МЕТОД: Строит индексы для всех модулей"""
+        print("🔨 Начинаю построение индексов...")
 
-        with open(os.path.join(self.storage_path, "documents.json"), "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        results = {}
 
-    def load_index(self):
-        """Загрузить индекс с диска"""
-        index_path = os.path.join(self.storage_path, "index.faiss")
-        documents_path = os.path.join(self.storage_path, "documents.json")
+        # 🔥 ИСПРАВЛЕНИЕ: active_searchers содержит имена модулей (строки), а не объекты!
+        for module_name in self.manager.active_searchers:
+            print(f"  📝 Обрабатываю модуль: {module_name}")
 
-        if os.path.exists(index_path) and os.path.exists(documents_path):
-            # Загружаем FAISS индекс
-            self.index = faiss.read_index(index_path)
+            # Получаем реальный объект модуля
+            if module_name not in self.manager.search_modules:
+                print(f"    ❌ Модуль '{module_name}' не найден в search_modules")
+                results[module_name] = {"status": "error", "message": "Module not found"}
+                continue
 
-            # Загружаем документы
-            with open(documents_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                self.documents = data["documents"]
-                self.doc_ids = data["doc_ids"]
-                self.is_fitted = data["is_fitted"]
+            module = self.manager.search_modules[module_name]
 
-            return True
-        return False
+            try:
+                # 🔥 ИСПРАВЛЕНИЕ: Получаем документы из manager
+                if hasattr(self.manager, "documents") and self.manager.documents:
+                    documents = self.manager.documents
+                    print(f"    📚 Документов в manager: {len(documents)}")
+                elif hasattr(module, "documents") and module.documents:
+                    documents = module.documents
+                    print(f"    📚 Документов в модуле: {len(documents)}")
+                else:
+                    print(f"    ⚠️ Нет документов для модуля {module_name}")
+                    results[module_name] = {"status": "error", "message": "No documents"}
+                    continue
+
+                # Обучение модуля
+                if hasattr(module, "fit"):
+                    print(f"    🎯 Вызываю fit()...")
+                    result = module.fit(documents)
+                    results[module_name] = {
+                        "status": "success",
+                        "method": "fit",
+                        "documents": len(documents),
+                    }
+                elif hasattr(module, "add_documents"):
+                    print(f"    📥 Вызываю add_documents()...")
+                    result = module.add_documents(documents)
+                    results[module_name] = {
+                        "status": "success",
+                        "method": "add_documents",
+                        "documents": len(documents),
+                    }
+                else:
+                    results[module_name] = {"status": "skipped", "message": "No indexing method"}
+
+                print(f"    ✅ {module_name}: {results[module_name]['status']}")
+
+            except Exception as e:
+                print(f"    ❌ {module_name}: ошибка - {str(e)}")
+                results[module_name] = {"status": "error", "message": str(e)}
+
+        self._index_built = True
+        self.manager.save_all()
+
+        print(f"✅ Построение индексов завершено")
+        return {
+            "status": "success",
+            "message": "Index rebuilt",
+            "details": {
+                "status": "completed",
+                "index_built": True,
+                "total_modules": len(results),
+                "results": results,
+            },
+        }
+
+    def is_index_built(self) -> bool:
+        """Проверить построен ли индекс"""
+        return self._index_built
+
+    def get_document_count(self) -> int:
+        """Получить количество документов"""
+        if hasattr(self.manager, "documents"):
+            return len(self.manager.documents)
+        return 0
+
+    def add_search_module(self, module_type: str, name: str, **kwargs) -> Dict:
+        """Добавить новый поисковый модуль"""
+        if module_type == "e5":
+            from src.core.modules.e5_module import E5Module
+
+            module = E5Module(name=name, **kwargs)
+        elif module_type == "clip":
+            from src.core.modules.clip_module import CLIPModule
+
+            module = CLIPModule(name=name, **kwargs)
+        elif module_type == "layoutlm":
+            from src.core.modules.layoutlm_module import LayoutLMModule
+
+            module = LayoutLMModule(name=name, **kwargs)
+        else:
+            return {"status": "error", "message": f"Unknown module type: {module_type}"}
+
+        self.manager.register_search_module(module, activate=True)
+        return {"status": "added", "name": name, "type": module_type}
+
+    def remove_search_module(self, name: str) -> Dict:
+        """Удалить поисковый модуль"""
+        self.manager.unregister_search_module(name)
+        return {"status": "removed", "name": name}
+
+    def list_modules(self) -> Dict:
+        """Список всех модулей"""
+        return self.manager.get_info()
 
 
-# Глобальный экземпляр RAG
-rag_engine = SimpleTextRAG()
+# Глобальный экземпляр
+rag_engine = ModularRAG()

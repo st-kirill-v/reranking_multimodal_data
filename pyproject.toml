@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "reranking-multimodal-data"
 version = "0.1.0"
@@ -18,10 +22,20 @@ dependencies = [
     "tqdm>=4.67.1",
     "transformers>=4.57.3",
     "uvicorn>=0.38.0",
+    "rank-bm25>=0.2.2",
+    "nltk>=3.8.0",
+    "pymorphy3>=2.0.0",
 ]
 
 [project.optional-dependencies]
 dev = ["pytest", "black", "ruff", "mypy"]
+
+[project.scripts]
+rag-server = "src.api.server:main"
+rag-loader = "src.pipeline.dataset_loader:main"
+
+[tool.setuptools]
+packages = ["src"]
 
 [tool.black]
 line-length = 100
