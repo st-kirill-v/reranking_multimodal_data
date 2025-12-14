@@ -101,16 +101,16 @@ class BM25Module(BaseSearchModule):
         from rank_bm25 import BM25Okapi
 
         try:
-            # Используем более мягкие параметры
+            # 🔥 ШАГ 2: ОПТИМАЛЬНЫЕ ПАРАМЕТРЫ ДЛЯ БОЛЬШОЙ КОЛЛЕКЦИИ
             self.bm25 = BM25Okapi(
-                processed_docs, k1=1.2, b=0.75  # Более мягкий параметр  # По умолчанию
+                processed_docs,
+                k1=2.5,  # Увеличить для больших коллекций (было 1.2)
+                b=0.9,  # Увеличить для лучшего учета длины документа
             )
             self.is_fitted = True
             self.total_terms = sum(len(doc) for doc in processed_docs)
 
-            print(
-                f"✅ {self.name}: Индекс построен. Документов: {len(self.documents)}, Терминов: {self.total_terms}"
-            )
+            print(f"✅ {self.name}: Индекс построен с k1=2.5, b=0.9")
 
             return {
                 "module": self.name,
@@ -149,33 +149,20 @@ class BM25Module(BaseSearchModule):
             # Получаем скоры
             raw_scores = self.bm25.get_scores(processed_query)
 
-            # 🔥 ИСПРАВЛЕНИЕ: Нормализуем скоры к [0, 1]
+            # 🔥 ШАГ 1: ПРОСТАЯ НОРМАЛИЗАЦИЯ
             if len(raw_scores) > 0:
-                # 1. Избавляемся от отрицательных значений (сдвигаем все вверх)
+                # Получаем min и max
                 min_score = np.min(raw_scores)
-                if min_score < 0:
-                    shifted_scores = raw_scores - min_score + 0.1
+                max_score = np.max(raw_scores)
+
+                # Если все scores одинаковые (редкий случай)
+                if max_score - min_score < 1e-6:
+                    normalized_scores = np.ones_like(raw_scores) * 0.5
                 else:
-                    shifted_scores = raw_scores + 0.1  # Добавляем небольшое значение
+                    # Простая min-max нормализация к [0, 1]
+                    normalized_scores = (raw_scores - min_score) / (max_score - min_score)
 
-                # 2. Применяем логарифмическое преобразование для растягивания
-                # log1p(x) = log(1 + x) - избегаем log(0)
-                log_scores = np.log1p(shifted_scores * 10)  # Умножаем на 10 для масштабирования
-
-                # 3. Min-max нормализация к [0, 1]
-                max_log = np.max(log_scores)
-                min_log = np.min(log_scores)
-
-                if max_log > min_log:
-                    normalized_scores = (log_scores - min_log) / (max_log - min_log)
-                else:
-                    # Если все скоры равны, задаем базовое значение
-                    normalized_scores = np.ones_like(log_scores) * 0.5
-
-                # 4. Сигмоида для более четкого разделения (опционально)
-                # scores = 1 / (1 + np.exp(-normalized_scores * 6 + 3))
-                scores = normalized_scores  # Можно использовать напрямую
-
+                scores = normalized_scores
             else:
                 scores = np.array([])
 
@@ -184,40 +171,33 @@ class BM25Module(BaseSearchModule):
                 # Сортируем по убыванию
                 top_indices = np.argsort(scores)[::-1][:top_k]
 
-                # Формируем результаты с нормализованными скорами
+                # Формируем результаты
                 results = []
                 for idx in top_indices:
-                    if scores[idx] > 0.01:  # Небольшой порог релевантности
+                    if scores[idx] > 0.01:  # Небольшой порог
                         results.append(
                             {
                                 "id": self.ids[idx],
                                 "content": self.documents[idx],
                                 "score": float(scores[idx]),  # Нормализованный скор 0-1
-                                "raw_score": float(raw_scores[idx]),  # Оригинальный BM25 скор
+                                "raw_score": float(raw_scores[idx]),
                                 "module": self.name,
                                 "module_type": "bm25",
                             }
                         )
 
-                print(
-                    f"✅ {self.name}: Поиск '{query}' -> найдено {len(results)} результатов (нормализованные скоры)"
-                )
+                print(f"✅ {self.name}: Поиск '{query}' -> {len(results)} результатов")
                 return results
-
             else:
-                # 🔥 ИСПРАВЛЕНО: Показываем топ-3 документа даже с низкими скорами
-                top_indices = np.argsort(raw_scores)[::-1][:top_k]
+                # Fallback: показываем топ-3 с минимальными скорами
+                top_indices = np.argsort(raw_scores)[::-1][: min(top_k, 3)]
                 results = []
                 for idx in top_indices:
-                    # Нормализуем на лету для fallback
-                    raw_score = raw_scores[idx]
-                    norm_score = max(0.01, min(0.1, raw_score / 100)) if raw_score > 0 else 0.01
-
                     results.append(
                         {
                             "id": self.ids[idx],
                             "content": self.documents[idx],
-                            "score": norm_score,  # Минимальный нормализованный скор
+                            "score": 0.05,  # Минимальный confidence
                             "raw_score": float(raw_scores[idx]),
                             "module": self.name,
                             "module_type": "bm25",
@@ -226,16 +206,13 @@ class BM25Module(BaseSearchModule):
                     )
 
                 if results:
-                    print(
-                        f"⚠️ {self.name}: Поиск '{query}' -> найдено {len(results)} результатов (низкие скоры)"
-                    )
+                    print(f"⚠️ {self.name}: Низкие скоры для '{query}'")
                     return results
                 else:
-                    print(f"⚠️ {self.name}: Нет результатов для запроса '{query}'")
                     return []
 
         except Exception as e:
-            print(f"❌ {self.name}: Ошибка поиска для запроса '{query}': {e}")
+            print(f"❌ {self.name}: Ошибка поиска: {e}")
             return []
 
     def get_info(self):
