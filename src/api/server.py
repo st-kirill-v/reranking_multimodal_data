@@ -1,35 +1,24 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import List, Optional, Dict
-import sys
-import os
 import uvicorn
 from contextlib import asynccontextmanager
 from datetime import datetime
 
-# Импортируем НОВЫЙ модульный RAG
 from src.core.rag import rag_engine
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Жизненный цикл приложения - УПРОЩЕННАЯ ВЕРСИЯ"""
-    print("🚀 Инициализация RAG системы...")
 
-    # Загружаем модули если есть сохраненные
-    loaded = rag_engine.load_index()
-    print(f"📦 Модули загружены: {'✅' if loaded else '❌ (начинаем с чистого состояния)'}")
-
-    # ВСЕГДА пробуем построить индекс
-    print("🔨 Автоматически строю индекс...")
     try:
         result = rag_engine.build_index()
-        print(f"✅ Индекс построен: {result}")
+        print(f"Индекс построен")
     except Exception as e:
-        print(f"⚠️ Предупреждение при построении индекса: {e}")
-        print("   (возможно индекс уже построен или нет документов)")
+        print(f"Предупреждение при построении индекса: {e}")
+        print("Возможно индекс уже построен или нет документов")
 
-    print(f"🎯 Система готова! Модулей: {len(rag_engine.manager.active_searchers)}")
+    print(f"Система готова. Модулей: {len(rag_engine.manager.active_searchers)}")
     yield
 
 
@@ -41,7 +30,11 @@ app = FastAPI(
 )
 
 
-# Старые модели (полная обратная совместимость!)
+class QueryRequest(BaseModel):
+    query: str
+    top_k: Optional[int] = 3
+
+
 class AddDocumentsRequest(BaseModel):
     documents: List[str]
     ids: Optional[List[str]] = None
@@ -50,22 +43,23 @@ class AddDocumentsRequest(BaseModel):
 class SearchRequest(BaseModel):
     query: str
     n_results: Optional[int] = 5
-    strategy: Optional[str] = "auto"  # Новое поле!
+    strategy: Optional[str] = "auto"
 
 
-# Новые модели для управления модулями
 class AddModuleRequest(BaseModel):
-    type: str  # "e5", "clip", "layoutlm"
+    type: str
     name: Optional[str] = None
     config: Optional[Dict] = {}
 
 
-# ===== СТАРЫЕ ЭНДПОИНТЫ (работают как раньше!) =====
+class ExplainRequest(BaseModel):
+    query: str
+    document_type: Optional[str] = None
 
 
 @app.get("/")
 async def root():
-    return {"message": "Modular RAG is running (BM25 based)"}
+    return {"message": "Modular RAG is running"}
 
 
 @app.get("/health")
@@ -78,9 +72,23 @@ async def get_info():
     return rag_engine.get_info()
 
 
+@app.post("/api/query")
+async def api_query(request: QueryRequest):
+    try:
+        result = rag_engine.generate_answer(request.query, top_k=request.top_k)
+        return {
+            "success": True,
+            "query": result["query"],
+            "answer": result["answer"],
+            "sources": result.get("sources", []),
+            "total_found": result.get("total_found", 0),
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
 @app.post("/documents")
 async def add_documents(request: AddDocumentsRequest):
-    """Добавить документы (работает со всеми модулями)"""
     try:
         result = rag_engine.add_documents(request.documents, request.ids)
         return result
@@ -90,7 +98,6 @@ async def add_documents(request: AddDocumentsRequest):
 
 @app.post("/search")
 async def search(request: SearchRequest):
-    """Поиск (полная обратная совместимость!)"""
     try:
         results = rag_engine.search(request.query, request.n_results, request.strategy)
         return results
@@ -107,12 +114,8 @@ async def clear_documents():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ===== НОВЫЕ ЭНДПОИНТЫ ДЛЯ УПРАВЛЕНИЯ =====
-
-
 @app.post("/modules")
 async def add_module(request: AddModuleRequest):
-    """Добавить новый модуль (E5, CLIP, etc)"""
     try:
         name = request.name or f"{request.type}_module"
         result = rag_engine.add_search_module(module_type=request.type, name=name, **request.config)
@@ -123,7 +126,6 @@ async def add_module(request: AddModuleRequest):
 
 @app.delete("/modules/{name}")
 async def remove_module(name: str):
-    """Удалить модуль"""
     try:
         result = rag_engine.remove_search_module(name)
         return result
@@ -133,13 +135,11 @@ async def remove_module(name: str):
 
 @app.get("/modules")
 async def list_modules():
-    """Список всех модулей"""
     return rag_engine.list_modules()
 
 
 @app.post("/load-squad-dataset")
 async def load_squad_dataset():
-    """Старый эндпоинт для SQuAD"""
     try:
         from src.pipeline.dataset_loader import load_squad_v2_local
 
@@ -158,28 +158,14 @@ async def load_squad_dataset():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-class ExplainRequest(BaseModel):
-    """Модель для тестирования роутера"""
-
-    query: str
-    document_type: Optional[str] = None
-
-
-# ==================== 🆕 НОВЫЕ ЭНДПОИНТЫ ====================
 @app.post("/explain-router")
 async def explain_router(request: ExplainRequest):
-    """
-    🔍 Тестирование SmartRouter
-    Показывает какие модули будут использованы для запроса и почему
-    """
     try:
-        # Получаем активный роутер
         router = rag_engine.manager.routers.get("smart")
 
         if not router:
             raise HTTPException(status_code=400, detail="SmartRouter не активирован")
 
-        # Получаем объяснение
         explanation = router.explain(request.query, request.document_type)
         explanation["timestamp"] = datetime.now().isoformat()
 
@@ -189,10 +175,8 @@ async def explain_router(request: ExplainRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# 🔥 ДОБАВИЛ: Эндпоинт для принудительного построения индекса
 @app.post("/rebuild-index")
 async def rebuild_index():
-    """Принудительно перестроить индекс"""
     try:
         result = rag_engine.build_index()
         return {"status": "success", "message": "Index rebuilt", "details": result}
@@ -202,14 +186,9 @@ async def rebuild_index():
 
 @app.get("/index-status")
 async def index_status():
-    """Проверить состояние индекса"""
     try:
-        # 🔥 ИСПРАВЛЕНИЕ: active_searchers возвращает строки, а не объекты
-        # Получаем объекты модулей по их именам
-
         modules_info = []
 
-        # 1. Если active_searchers содержит строки (имена модулей)
         if rag_engine.manager.active_searchers and isinstance(
             rag_engine.manager.active_searchers[0], str
         ):
@@ -233,7 +212,6 @@ async def index_status():
 
                     modules_info.append(module_info)
                 else:
-                    # Модуль не найден в search_modules
                     modules_info.append(
                         {
                             "index": i,
@@ -242,8 +220,6 @@ async def index_status():
                             "error": f"Module '{module_name}' not found in search_modules",
                         }
                     )
-
-        # 2. Если active_searchers содержит объекты (старый вариант)
         else:
             for i, module in enumerate(rag_engine.manager.active_searchers):
                 module_name = getattr(module, "name", f"module_{i}")
@@ -268,27 +244,63 @@ async def index_status():
             "active_modules_count": len(rag_engine.manager.active_searchers),
             "modules": modules_info,
             "search_modules_available": list(rag_engine.manager.search_modules.keys()),
-            "active_searchers_raw": rag_engine.manager.active_searchers[:3],  # первые 3 для отладки
+            "active_searchers_raw": rag_engine.manager.active_searchers[:3],
         }
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-print("🔄 Автоматически перестраиваю BM25...")
+@app.get("/metrics")
+async def get_metrics():
+    """Получить сводку метрик производительности."""
+    return rag_engine.get_metrics_summary()
+
+
+@app.get("/metrics/reset")
+async def reset_metrics():
+    """Сбросить собранные метрики."""
+    return rag_engine.reset_metrics()
+
+
+@app.get("/metrics/print")
+async def print_metrics():
+    """Вывести метрики в консоль и вернуть JSON."""
+    try:
+        summary = rag_engine.get_metrics_summary()
+
+        if "error" in summary:
+            return summary
+
+        print("=== МЕТРИКИ ПОИСКА ===")
+        if "latency_ms" in summary:
+            lat = summary["latency_ms"]
+            print(
+                f"Латентность: средняя {lat['mean']:.1f}ms, p50 {lat['p50']:.1f}ms, p95 {lat['p95']:.1f}ms"
+            )
+
+        for key, value in summary.items():
+            if key != "latency_ms" and isinstance(value, dict) and "mean" in value:
+                print(f"{key}: {value['mean']:.3f} ± {value['std']:.3f}")
+
+        return summary
+    except Exception as e:
+        return {"error": str(e)}
+
+
+print("Автоматически перестраиваю BM25...")
 try:
     bm25 = rag_engine.manager.search_modules.get("bm25")
     if bm25 and hasattr(bm25, "documents") and bm25.documents and not bm25.is_fitted:
-        print(f"📊 Документов: {len(bm25.documents)}, is_fitted: {bm25.is_fitted}")
+        print(f"Документов: {len(bm25.documents)}, is_fitted: {bm25.is_fitted}")
         result = bm25.add_documents(bm25.documents)
-        print(f"✅ Результат: {result['status']}")
+        print(f"Результат: {result['status']}")
 except Exception as e:
-    print(f"⚠️ Ошибка перестройки BM25: {e}")
+    print(f"Ошибка перестройки BM25: {e}")
 
 if __name__ == "__main__":
-    print("Modular RAG API запущен!")
-    print("Основа: BM25 с русской морфологией")
-    print("• http://localhost:8000/docs")
-    print("• Для проверки индекса: GET /index-status")
-    print("• Для перестроения: POST /rebuild-index")
+    print("Modular RAG API запущен")
+    print("http://localhost:8000/docs")
+    print("Для проверки индекса: GET /index-status")
+    print("Для перестроения: POST /rebuild-index")
     uvicorn.run(app, host="0.0.0.0", port=8000)
