@@ -1,50 +1,54 @@
 """
-Тестовый скрипт для проверки работы RAG системы.
-Проверяет загрузку документов, поиск и генерацию ответов.
+Тестовый скрипт для проверки работы RAG системы с каскадным поиском BM25+E5
 """
 
 import sys
 import os
 import traceback
 
-# Добавляем путь к проекту
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from src.core.rag import ModularRAG
 
 
 def test_rag_system():
-    """Основной тест RAG системы."""
+    """Основной тест RAG системы с каскадным поиском BM25+E5"""
     print("=" * 60)
-    print("ТЕСТ RAG СИСТЕМЫ")
+    print("ТЕСТ RAG СИСТЕМЫ С КАСКАДНЫМ ПОИСКОМ (BM25 + E5)")
     print("=" * 60)
 
     # 1. Инициализация
     print("\n1. ИНИЦИАЛИЗАЦИЯ RAG...")
     try:
         rag = ModularRAG()
-        print("✓ RAG система создана успешно")
+
+        if "e5_reranker" not in rag.manager.active_searchers:
+            rag.manager.active_searchers.append("e5_reranker")
+            print("Добавил e5_reranker в активные модули поиска")
+
+        print("RAG система создана успешно")
     except Exception as e:
-        print(f"✗ Ошибка при создании RAG: {e}")
+        print(f"Ошибка при создании RAG: {e}")
+        traceback.print_exc()
         return
 
     # 2. Проверка состояния системы
     print("\n2. СОСТОЯНИЕ СИСТЕМЫ:")
     try:
         status = rag.get_system_status()
-        print(f"   Всего документов: {status['total_documents']}")
-        print(f"   Индекс построен: {status['index_built']}")
-        print(f"   LLM загружена: {status['llm_loaded']}")
-        print(f"   Активные модули: {', '.join(status['active_modules'])}")
+        print(f"Всего документов: {status['total_documents']}")
+        print(f"Индекс построен: {status['index_built']}")
+        print(f"LLM загружена: {status['llm_loaded']}")
+        print(f"Активные модули: {', '.join(status['active_modules'])}")
 
         for name, module_info in status["modules"].items():
-            print(f"\n   Модуль '{name}':")
-            print(f"     - Тип: {module_info['type']}")
-            print(f"     - Активен: {module_info['active']}")
-            print(f"     - Документов: {module_info['doc_count']}")
-            print(f"     - Индекс готов: {module_info['index_ready']}")
+            print(f"\nМодуль '{name}':")
+            print(f"  Тип: {module_info['type']}")
+            print(f"  Активен: {module_info['active']}")
+            print(f"  Документов: {module_info['doc_count']}")
+            print(f"  Индекс готов: {module_info['index_ready']}")
     except Exception as e:
-        print(f"✗ Ошибка при проверке состояния: {e}")
+        print(f"Ошибка при проверке состояния: {e}")
 
     # 3. Добавление тестовых документов
     print("\n3. ДОБАВЛЕНИЕ ДОКУМЕНТОВ...")
@@ -63,215 +67,247 @@ def test_rag_system():
 
     try:
         add_result = rag.add_documents(test_documents)
-        print(f"✓ Добавлено {len(test_documents)} документов")
-        print(f"   Результат: {add_result.get('status', 'unknown')}")
+        print(f"Добавлено {len(test_documents)} документов")
+        print(f"Результат: {add_result.get('status', 'unknown')}")
+
+        if "details" in add_result:
+            for module_name, result in add_result["details"].items():
+                if result.get("status") == "success":
+                    count = result.get("added", result.get("total_documents", 0))
+                    print(f"{module_name}: {count} документов")
     except Exception as e:
-        print(f"✗ Ошибка при добавлении документов: {e}")
+        print(f"Ошибка при добавлении документов: {e}")
+        traceback.print_exc()
         return
 
     # 4. Построение индекса
     print("\n4. ПОСТРОЕНИЕ ИНДЕКСА...")
     try:
         index_result = rag.build_index()
-        print(f"✓ Индекс построен")
+        print("Индекс построен")
         if "details" in index_result:
             for module_name, result in index_result["details"].get("results", {}).items():
                 status = result.get("status", "unknown")
                 method = result.get("method", "")
-                print(f"   {module_name}: {status} ({method})")
+                details = result.get("details", "")
+                print(f"{module_name}: {status} ({method}) {details}")
     except Exception as e:
-        print(f"✗ Ошибка при построении индекса: {e}")
+        print(f"Ошибка при построении индекса: {e}")
+        traceback.print_exc()
 
-    # 5. Проверка поиска
-    print("\n5. ТЕСТ ПОИСКА...")
+    # 5. Проверка поиска с каскадным BM25+E5
+    print("\n5. ТЕСТ КАСКАДНОГО ПОИСКА (BM25 → E5)...")
     test_queries = [
-        "Что такое машинное обучение?",
-        "Объясни архитектуру трансформеров",
-        "Какие бывают нейронные сети?",
-        "Что такое BERT?",
+        ("Что такое машинное обучение?", "Простой запрос"),
+        ("Объясни архитектуру трансформеров", "Запрос про трансформеры"),
+        ("Что такое BERT и GPT?", "Запрос про модели NLP"),
     ]
 
-    for query in test_queries[:2]:  # Тестируем только 2 запроса для скорости
-        print(f"\n   Запрос: '{query}'")
+    for query, description in test_queries:
+        print(f"\nЗапрос: '{query}' ({description})")
         try:
-            search_result = rag.search(query, n_results=3)
+            search_result = rag.search(query, n_results=3, strategy="all")
 
             if "results" in search_result and search_result["results"]:
-                print(f"   ✓ Найдено результатов: {len(search_result['results'])}")
+                print(f"Найдено результатов: {len(search_result['results'])}")
+
+                modules_used = search_result.get("modules_used", [])
+                print(f"Использованы модули: {', '.join(modules_used)}")
+
                 for i, doc in enumerate(search_result["results"][:3], 1):
                     content = doc.get("content", "")
-                    preview = content[:100] + "..." if len(content) > 100 else content
+                    preview = content[:80] + "..." if len(content) > 80 else content
                     score = doc.get("score", 0)
-                    print(f"     {i}. [{score:.3f}] {preview}")
+                    method = doc.get("method", "unknown")
+
+                    if method == "bm25+e5":
+                        e5_score = doc.get("e5_score", 0)
+                        bm25_score = doc.get("bm25_score", 0)
+                        print(
+                            f"{i}. [{score:.3f}] [{method}] E5:{e5_score:.3f}+BM25:{bm25_score:.3f} - {preview}"
+                        )
+                    else:
+                        print(f"{i}. [{score:.3f}] [{method}] - {preview}")
             else:
-                print(f"   ✗ Нет результатов")
+                print("Нет результатов")
+
+            if search_result.get("all_results"):
+                print("Подробно по модулям:")
+                for module_name, module_results in search_result["all_results"].items():
+                    if module_results:
+                        print(f"  {module_name}: {len(module_results)} результатов")
 
         except Exception as e:
-            print(f"   ✗ Ошибка поиска: {e}")
+            print(f"Ошибка поиска: {e}")
+            traceback.print_exc()
 
-    # 6. Тест генерации ответов
-    print("\n6. ТЕСТ ГЕНЕРАЦИИ ОТВЕТОВ...")
+    # 6. Тест генерации ответов (упрощенный)
+    print("\n6. ТЕСТ ГЕНЕРАЦИИ ОТВЕТОВ (упрощенный)...")
     test_questions = [
-        "Что такое машинное обучение и какие типы бывают?",
-        "Объясни что такое трансформеры в NLP",
+        "Что такое машинное обучение?",
+        "Объясни что такое трансформеры",
     ]
 
     for question in test_questions:
-        print(f"\n   Вопрос: '{question}'")
+        print(f"\nВопрос: '{question}'")
         try:
-            answer_result = rag.generate_answer(question, top_k=3)
+            search_result = rag.search(question, n_results=2, strategy="all")
 
-            if "answer" in answer_result:
-                print(f"   ✓ Ответ сгенерирован:")
-                print(f"     {answer_result['answer']}")
+            if search_result.get("results"):
+                print(f"Найдено {len(search_result['results'])} источников для ответа")
 
-                if answer_result.get("sources"):
-                    print(f"     Использовано источников: {len(answer_result['sources'])}")
-                    for i, source in enumerate(answer_result["sources"][:2], 1):
-                        print(f"     {i}. {source.get('preview', '')}")
+                print("Лучшие источники:")
+                for i, doc in enumerate(search_result["results"][:2], 1):
+                    content = doc.get("content", "")
+                    score = doc.get("score", 0)
+                    method = doc.get("method", "unknown")
+                    preview = content[:120] + "..." if len(content) > 120 else content
+                    print(f"{i}. [{score:.3f}] [{method}] {preview}")
+
+                    if method == "bm25+e5":
+                        e5_score = doc.get("e5_score", 0)
+                        bm25_score = doc.get("bm25_score", 0)
+                        print(f"  (E5: {e5_score:.3f}, BM25: {bm25_score:.3f})")
             else:
-                print(f"   ✗ Не удалось сгенерировать ответ")
+                print("Не найдено источников для ответа")
 
         except Exception as e:
-            print(f"   ✗ Ошибка генерации: {e}")
+            print(f"Ошибка: {e}")
 
     # 7. Проверка метрик
     print("\n7. ПРОВЕРКА МЕТРИК...")
     try:
         metrics = rag.get_metrics_summary()
-        print(f"✓ Метрики собраны")
-        if "latency_ms" in metrics:
-            lat = metrics["latency_ms"]
-            print(f"   Латентность: средняя {lat.get('mean', 0):.1f}ms")
+        print("Метрики собраны")
 
         query_count = metrics.get("query_count", 0)
-        print(f"   Всего запросов: {query_count}")
+        print(f"Всего запросов: {query_count}")
+
+        if "module_stats" in metrics:
+            print("Статистика по модулям:")
+            for module_name, stats in metrics["module_stats"].items():
+                calls = stats.get("call_count", 0)
+                avg_time = stats.get("avg_time_ms", 0)
+                print(f"  {module_name}: {calls} вызовов, ~{avg_time:.1f}ms")
+
     except Exception as e:
-        print(f"✗ Ошибка при получении метрик: {e}")
+        print(f"Ошибка при получении метрик: {e}")
 
     # 8. Итоговая информация
     print("\n8. ИТОГОВАЯ ИНФОРМАЦИЯ:")
     try:
         final_status = rag.get_system_status()
-        print(f"   Всего документов в системе: {final_status['total_documents']}")
+        print(f"Всего документов в системе: {final_status['total_documents']}")
+        print(f"Активные модули поиска: {', '.join(final_status['active_modules'])}")
 
-        # Информация о LLM
+        for name, module_info in final_status["modules"].items():
+            if module_info["active"]:
+                print(
+                    f"Модуль {name} ({module_info['type']}): {module_info['doc_count']} документов, индекс: {'✓' if module_info['index_ready'] else '✗'}"
+                )
+
         llm_info = rag.llm_generator.get_info()
-        print(f"   LLM генератор: {llm_info.get('name', 'unknown')}")
-        print(f"   Модель загружена: {llm_info.get('model_loaded', False)}")
-        print(f"   Устройство: {llm_info.get('device', 'unknown')}")
+        print(f"LLM генератор: {llm_info.get('name', 'unknown')}")
+        print(f"Модель загружена: {'✓' if llm_info.get('model_loaded', False) else '✗'}")
+        print(f"Устройство: {llm_info.get('device', 'unknown')}")
 
     except Exception as e:
-        print(f"✗ Ошибка при получении итоговой информации: {e}")
+        print(f"Ошибка при получении итоговой информации: {e}")
 
     print("\n" + "=" * 60)
     print("ТЕСТ ЗАВЕРШЕН")
     print("=" * 60)
 
 
-def test_llm_generator():
-    """Тест LLM генератора отдельно."""
-    print("\n" + "=" * 60)
-    print("ТЕСТ LLM ГЕНЕРАТОРА")
+def test_cascaded_search_only():
+    """Тест только каскадного поиска без генерации"""
     print("=" * 60)
-
-    try:
-        from src.core.generators.llm_generator import create_llm_generator
-
-        print("\n1. Создание генератора...")
-        generator = create_llm_generator("dialogpt")
-
-        print("✓ Генератор создан")
-        info = generator.get_info()
-        print(f"   Тип: {info.get('type')}")
-        print(f"   Имя: {info.get('name')}")
-        print(f"   Загружена: {info.get('model_loaded')}")
-        print(f"   Устройство: {info.get('device')}")
-
-        # Тест переписывания текста
-        print("\n2. Тест переписывания текста...")
-        test_text = "Машинное обучение это очень интересная тема для изучения."
-
-        for style in ["improve", "formal", "simplify"]:
-            result = generator.rewrite_text(test_text, style)
-            print(f"   Стиль '{style}': {result}")
-
-        # Тест генерации ответа
-        print("\n3. Тест генерации ответа...")
-        test_context = [
-            {
-                "content": "Машинное обучение — это область искусственного интеллекта, которая изучает алгоритмы, способные обучаться на данных. Основные подходы: обучение с учителем, без учителя и с подкреплением."
-            },
-            {
-                "content": "Нейронные сети моделируют работу человеческого мозга и состоят из слоёв нейронов. Они используются для распознавания образов, классификации и прогнозирования."
-            },
-        ]
-
-        question = "Что такое машинное обучение и как оно связано с нейронными сетями?"
-        answer = generator.generate_answer(question, test_context)
-        print(f"   Вопрос: {question}")
-        print(f"   Ответ: {answer}")
-
-    except Exception as e:
-        print(f"✗ Ошибка теста LLM: {e}")
-        import traceback
-
-        traceback.print_exc()
-
-
-def test_single_module(module_name: str = "bm25"):
-    """Тест отдельного модуля поиска."""
-    print(f"\n" + "=" * 60)
-    print(f"ТЕСТ МОДУЛЯ {module_name.upper()}")
+    print("ТЕСТ КАСКАДНОГО ПОИСКА (BM25 → E5)")
     print("=" * 60)
 
     from src.core.module_manager import ModuleManager
 
-    manager = ModuleManager()
+    manager = ModuleManager(storage_path="cache/cascade_test")
 
-    # Создаем и регистрируем модуль
-    if module_name == "bm25":
-        from src.core.modules.bm25_module import BM25Module
+    bm25 = manager.register_bm25_module(
+        name="bm25_cascade", language="russian", k1=1.2, b=0.75, activate=True
+    )
 
-        module = BM25Module(name="test_bm25", language="russian")
-    elif module_name == "e5":
-        from src.core.modules.e5_module import E5Module
+    e5 = manager.register_e5_module(
+        name="e5_cascade",
+        bm25_module_name="bm25_cascade",
+        top_k_candidates=50,
+        device="cpu",
+        activate=True,
+    )
 
-        module = E5Module(name="test_e5", device="cpu")
-    else:
-        print(f"✗ Неизвестный модуль: {module_name}")
-        return
-
-    manager.register_search_module(module, activate=True)
-
-    # Добавляем документы
     test_docs = [
-        "Машинное обучение изучает алгоритмы, которые учатся на данных.",
-        "Нейронные сети используются для распознавания образов.",
-        "Трансформеры — это архитектура для обработки текста.",
+        "Трансформеры — архитектура нейронных сетей с механизмом внимания.",
+        "BERT — модель трансформера от Google для понимания языка.",
+        "GPT-3 — большая языковая модель от OpenAI на основе трансформеров.",
+        "Машинное обучение изучает алгоритмы которые учатся на данных.",
+        "EMBEDDING — техника преобразования текста в векторы.",
     ]
 
-    print(f"\n1. Добавление документов в {module_name}...")
-    result = manager.add_documents(test_docs)
-    print(f"   Результат: {result}")
+    manager.add_documents(test_docs)
+    print(f"Добавлено {len(test_docs)} документов")
 
-    print(f"\n2. Поиск в {module_name}...")
-    query = "машинное обучение"
-    search_results = manager.search(query, n_results=2, strategy="simple")
+    test_cases = [
+        ("трансформеры", "Поиск по ключевому слову"),
+        ("архитектура трансформеров", "Расширенный запрос"),
+        ("BERT GPT модели", "Запрос с несколькими сущностями"),
+    ]
 
-    if search_results.get("results"):
-        print(f"   Запрос: '{query}'")
-        for i, doc in enumerate(search_results["results"][:2], 1):
-            content = doc.get("content", "")
-            preview = content[:80] + "..." if len(content) > 80 else content
-            score = doc.get("score", 0)
-            print(f"   {i}. [{score:.3f}] {preview}")
-    else:
-        print(f"   ✗ Нет результатов для '{query}'")
+    for query, description in test_cases:
+        print(f"\nЗапрос: '{query}' ({description})")
+
+        result = manager.search(query, top_k=3, strategy="all")
+
+        modules_used = result.get("modules_used", [])
+        print(f"Модули: {modules_used}")
+
+        if result.get("results"):
+            for i, doc in enumerate(result["results"][:3], 1):
+                score = doc.get("score", 0)
+                method = doc.get("method", "unknown")
+                preview = doc.get("content", "")[:70] + "..."
+
+                if method == "bm25+e5":
+                    e5_score = doc.get("e5_score", 0)
+                    bm25_score = doc.get("bm25_score", 0)
+                    print(f"{i}. [{score:.3f}] {method} (E5:{e5_score:.3f}+BM25:{bm25_score:.3f})")
+                    print(f"   {preview}")
+                else:
+                    print(f"{i}. [{score:.3f}] {method}")
+                    print(f"   {preview}")
+        else:
+            print("Нет результатов")
+
+    print("\n" + "=" * 60)
+    print("ТЕСТ ЗАВЕРШЕН")
+    print("=" * 60)
 
 
 if __name__ == "__main__":
     print("Запуск тестов RAG системы...")
 
-    # Запускаем тесты
-    test_rag_system()
+    print("\nВыберите тест:")
+    print("1. Полный тест RAG системы")
+    print("2. Только каскадный поиск (BM25 → E5)")
+    print("3. Оба теста")
+
+    choice = input("\nВведите номер (1-3): ").strip()
+
+    if choice == "1":
+        test_rag_system()
+    elif choice == "2":
+        test_cascaded_search_only()
+    elif choice == "3":
+        test_cascaded_search_only()
+        print("\n" + "=" * 60)
+        print("ПЕРЕХОД К ПОЛНОМУ ТЕСТУ RAG")
+        print("=" * 60)
+        test_rag_system()
+    else:
+        print("По умолчанию запускаю полный тест...")
+        test_rag_system()

@@ -197,14 +197,12 @@ class DialoGPTGenerator:
 
         context_text = "\n".join([f"[Документ {i+1}]: {ctx}" for i, ctx in enumerate(contexts)])
 
-        # Формируем промпт
-        prompt = f"""Вопрос: {query}
+        prompt = f"""Пользователь: {query}
 
-Релевантная информация:
+Информация для ответа:
 {context_text}
 
-На основе приведенной выше информации, дай прямой и точный ответ на вопрос.
-Ответ:"""
+Ассистент: На основе этой информации, """
 
         try:
             inputs = self.tokenizer(
@@ -228,18 +226,22 @@ class DialoGPTGenerator:
 
             full_response = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
 
-            # Извлекаем ответ
-            if "Ответ:" in full_response:
-                answer = full_response.split("Ответ:")[-1].strip()
-            elif "ответ:" in full_response:
-                answer = full_response.split("ответ:")[-1].strip()
+            # Извлекаем ответ (ищем ответ после "Ассистент: ")
+            if "Ассистент:" in full_response:
+                answer = full_response.split("Ассистент:")[-1].strip()
+            elif "assistant:" in full_response:
+                answer = full_response.split("assistant:")[-1].strip()
             else:
-                # Пытаемся извлечь текст после промпта
+                # Если не нашли маркер, берем всё после промпта
                 answer = full_response.replace(prompt, "").strip()
 
-            # Очищаем и форматируем ответ
+            # Если ответ пустой или слишком короткий
             if not answer or len(answer) < 3:
-                answer = "Информация есть в предоставленных документах."
+                # Fallback: берем первую часть контекста
+                if contexts:
+                    answer = f"Согласно информации: {contexts[0][:100]}..."
+                else:
+                    answer = "Не могу сформулировать ответ на основе доступной информации."
 
             # Удаляем лишние кавычки и символы
             answer = answer.strip('"').strip("'").strip()

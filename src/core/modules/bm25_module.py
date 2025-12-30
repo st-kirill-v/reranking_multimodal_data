@@ -13,9 +13,13 @@ from src.core.base import BaseSearchModule
 
 
 class BM25Module(BaseSearchModule):
-    def __init__(self, name: str = "bm25", language: str = "multilingual"):
+    def __init__(
+        self, name: str = "bm25", language: str = "multilingual", k1: float = 2.5, b: float = 0.9
+    ):
         self.name = name
         self.language = language
+        self.k1 = k1
+        self.b = b
         self.is_fitted = False
         self.documents = []
         self.total_terms = 0
@@ -90,11 +94,12 @@ class BM25Module(BaseSearchModule):
         from rank_bm25 import BM25Okapi
 
         try:
-            self.bm25 = BM25Okapi(processed_docs, k1=2.5, b=0.9)
+            # ИСПОЛЬЗУЕМ self.k1 и self.b вместо жестко заданных значений
+            self.bm25 = BM25Okapi(processed_docs, k1=self.k1, b=self.b)
             self.is_fitted = True
             self.total_terms = sum(len(doc) for doc in processed_docs)
 
-            print(f"{self.name}: индекс построен с k1=2.5, b=0.9")
+            print(f"{self.name}: индекс построен с k1={self.k1}, b={self.b}")  # ← ОБНОВЛЕНО
 
             return {
                 "module": self.name,
@@ -189,6 +194,8 @@ class BM25Module(BaseSearchModule):
             "name": self.name,
             "type": "bm25",
             "language": self.language,
+            "k1": self.k1,
+            "b": self.b,
             "total_documents": len(self.documents),
             "total_terms": self.total_terms,
             "is_fitted": self.is_fitted,
@@ -210,6 +217,8 @@ class BM25Module(BaseSearchModule):
             "documents": self.documents,
             "ids": self.ids,
             "language": self.language,
+            "k1": self.k1,  # ← ДОБАВЛЕНО для сохранения
+            "b": self.b,  # ← ДОБАВЛЕНО для сохранения
             "total_terms": self.total_terms,
             "is_fitted": self.is_fitted,
         }
@@ -221,11 +230,11 @@ class BM25Module(BaseSearchModule):
             with open(os.path.join(module_path, "bm25.pkl"), "wb") as f:
                 pickle.dump(self.bm25, f)
 
-    def load(self, path: str) -> bool:
+    def load(self, path: str) -> Dict[str, Any]:  # ← Изменили возвращаемый тип
         module_path = os.path.join(path, self.name)
 
         if not os.path.exists(module_path):
-            return False
+            return {"status": "not_found"}  # ← Возвращаем dict, а не False
 
         try:
             with open(os.path.join(module_path, "data.json"), "r", encoding="utf-8") as f:
@@ -234,6 +243,8 @@ class BM25Module(BaseSearchModule):
             self.documents = data["documents"]
             self.ids = data["ids"]
             self.language = data.get("language", "multilingual")
+            self.k1 = data.get("k1", 2.5)
+            self.b = data.get("b", 0.9)
             self.total_terms = data.get("total_terms", 0)
             self.is_fitted = data.get("is_fitted", False)
 
@@ -242,9 +253,11 @@ class BM25Module(BaseSearchModule):
                 with open(bm25_path, "rb") as f:
                     self.bm25 = pickle.load(f)
 
-            print(f"{self.name}: загружено {len(self.documents)} документов")
-            return True
+            print(
+                f"{self.name}: загружено {len(self.documents)} документов (k1={self.k1}, b={self.b})"
+            )
+            return {"status": "loaded", "count": len(self.documents)}  # ← Всегда возвращаем dict
 
         except Exception as e:
             print(f"ошибка загрузки модуля {self.name}: {e}")
-            return False
+            return {"status": "error", "error": str(e)}
