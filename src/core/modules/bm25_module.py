@@ -73,9 +73,9 @@ class BM25Module(BaseSearchModule):
                 for i in range(len(self.documents), len(self.documents) + len(documents))
             ]
 
-        if self.documents:
-            self.documents = []
-            self.ids = []
+        for doc_id in ids:
+            if doc_id in self.ids:
+                print(f"{self.name}: Предупреждение - дубликат ID: {doc_id}")
 
         self.documents.extend(documents)
         self.ids.extend(ids)
@@ -94,12 +94,12 @@ class BM25Module(BaseSearchModule):
         from rank_bm25 import BM25Okapi
 
         try:
-            # ИСПОЛЬЗУЕМ self.k1 и self.b вместо жестко заданных значений
+
             self.bm25 = BM25Okapi(processed_docs, k1=self.k1, b=self.b)
             self.is_fitted = True
             self.total_terms = sum(len(doc) for doc in processed_docs)
 
-            print(f"{self.name}: индекс построен с k1={self.k1}, b={self.b}")  # ← ОБНОВЛЕНО
+            print(f"{self.name}: индекс построен с k1={self.k1}, b={self.b}")
 
             return {
                 "module": self.name,
@@ -217,8 +217,8 @@ class BM25Module(BaseSearchModule):
             "documents": self.documents,
             "ids": self.ids,
             "language": self.language,
-            "k1": self.k1,  # ← ДОБАВЛЕНО для сохранения
-            "b": self.b,  # ← ДОБАВЛЕНО для сохранения
+            "k1": self.k1,
+            "b": self.b,
             "total_terms": self.total_terms,
             "is_fitted": self.is_fitted,
         }
@@ -230,11 +230,11 @@ class BM25Module(BaseSearchModule):
             with open(os.path.join(module_path, "bm25.pkl"), "wb") as f:
                 pickle.dump(self.bm25, f)
 
-    def load(self, path: str) -> Dict[str, Any]:  # ← Изменили возвращаемый тип
+    def load(self, path: str) -> Dict[str, Any]:  # Изменили возвращаемый тип
         module_path = os.path.join(path, self.name)
 
         if not os.path.exists(module_path):
-            return {"status": "not_found"}  # ← Возвращаем dict, а не False
+            return {"status": "not_found"}  #  Возвращаем dict, а не False
 
         try:
             with open(os.path.join(module_path, "data.json"), "r", encoding="utf-8") as f:

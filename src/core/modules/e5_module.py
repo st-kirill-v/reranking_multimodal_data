@@ -119,9 +119,14 @@ class E5Module:
         self.is_fitted = True
         return {"status": "fitted", "count": len(documents)}
 
-    def add_documents(self, documents: List[str], **kwargs) -> Dict[str, Any]:
-        """Добавляет документы и кеширует их эмбеддинги."""
-        print(f"E5Module: добавление {len(documents)} документов")
+    def add_documents(
+        self, documents: List[str], ids: Optional[List[str]] = None, **kwargs
+    ) -> Dict[str, Any]:
+
+        print(f"E5Module.add_documents ВЫЗВАН!")
+        print(f"Модуль: {self.name}")
+        print(f"Получаю документов: {len(documents)}")
+        print(f"IDs: {ids}")
 
         start_idx = len(self.documents)
         self.documents.extend(documents)
@@ -143,7 +148,8 @@ class E5Module:
         self.save()
 
         return {
-            "status": "added",
+            "status": "success",
+            "added": len(documents),
             "total_documents": len(self.documents),
             "embeddings_cached": cached,
             "name": self.name,
@@ -151,8 +157,6 @@ class E5Module:
 
     def search(self, query: str, top_k: int = 5, **kwargs) -> List[Dict[str, Any]]:
         """Поиск с использованием BM25 + E5 реранжирования."""
-        # УБРАЛИ: from src.core.rag import rag_engine
-
         if not query or not query.strip():
             return []
 
@@ -369,7 +373,6 @@ class E5Module:
                 if not os.path.exists(target_dir):
                     target_dir = "."  # Текущая директория
 
-            # Путь к файлу (БЕЗ создания подпапки e5_reranker!)
             path = os.path.join(target_dir, f"{self.name}_embeddings.npz")
 
         print(f"E5Module: пытаюсь загрузить эмбеддинги из {path}")
@@ -386,28 +389,44 @@ class E5Module:
             loaded_count = 0
             self.doc_embeddings = {}  # Очищаем перед загрузкой
 
+            if "__doc_count" in data:
+                try:
+                    doc_count = int(data["__doc_count"])
+                    print(f"E5Module: в файле было {doc_count} документов")
+                    # Создаем список документов нужной длины
+                    self.documents = [""] * doc_count
+                except Exception as e:
+                    print(f"E5Module: ошибка загрузки doc_count: {e}")
+
+            if "__metadata" in data:
+                try:
+                    metadata = json.loads(str(data["__metadata"]))
+                    metadata_loaded = 0
+                    for doc_id, text_snippet in metadata.items():
+                        # doc_id выглядит как "doc_123"
+                        try:
+                            idx = int(doc_id[4:])  # убираем "doc_"
+                            if idx < len(self.documents):
+                                self.documents[idx] = text_snippet
+                                metadata_loaded += 1
+                        except:
+                            continue
+                    if metadata_loaded > 0:
+                        print(f"E5Module: загружено {metadata_loaded} текстов документов")
+                except Exception as e:
+                    print(f"E5Module: ошибка загрузки метаданных: {e}")
+
+            if self.documents:
+                self.is_fitted = True
+
+            # Загружаем эмбеддинги
             for key in data.files:
                 if not key.startswith("__"):
                     self.doc_embeddings[key] = data[key]
                     loaded_count += 1
 
-            # Метаданные (если есть)
-            if "__metadata" in data:
-                try:
-                    metadata = json.loads(str(data["__metadata"]))
-                    # Можно логировать, но не обязательно
-                except:
-                    pass
-
-            if "__doc_count" in data:
-                try:
-                    doc_count = int(data["__doc_count"])
-                    print(f"E5Module: в файле было {doc_count} документов")
-                except:
-                    pass
-
             print(f"E5Module: успешно загружено {loaded_count} эмбеддингов")
-            return {"status": "loaded", "count": loaded_count}
+            return {"status": "loaded", "count": loaded_count, "documents": len(self.documents)}
 
         except PermissionError as e:
             # Специальная обработка ошибки прав доступа
@@ -461,6 +480,38 @@ class E5Module:
 
     def get_document_count(self) -> int:
         return len(self.documents)
+
+    def build_index(self, **kwargs):
+        """Строит индекс эмбеддингов."""
+        print(f"E5Module.build_index: начинаю, документов: {len(self.documents)}")
+
+        if not self.documents:
+            print("E5Module.build_index: нет документов!")
+            return {"status": "error", "message": "No documents"}
+
+        computed = 0
+        for i, doc in enumerate(self.documents):
+            doc_id = f"doc_{i}"
+            if doc_id not in self.doc_embeddings and doc.strip():
+                try:
+                    embedding = self._encode_text(doc, is_query=False)
+                    self.doc_embeddings[doc_id] = embedding
+                    computed += 1
+                except Exception as e:
+                    print(f"E5Module.build_index: ошибка для документа {i}: {e}")
+
+        save_result = self.save()
+        self.is_fitted = True
+
+        print(f"E5Module.build_index: готово! Эмбеддингов: {len(self.doc_embeddings)}")
+
+        return {
+            "status": "success",
+            "documents": len(self.documents),
+            "embeddings": len(self.doc_embeddings),
+            "computed": computed,
+            "save_result": save_result,
+        }
 
     def get_info(self) -> Dict[str, Any]:
         return {

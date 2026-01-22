@@ -118,15 +118,6 @@ class ModuleManager:
             if module_name in self.search_modules:
                 module = self.search_modules[module_name]
                 try:
-                    # Для E5 проверяем загрузку модели
-                    if hasattr(module, "model_loaded"):
-                        if not getattr(module, "model_loaded", False):
-                            results[module_name] = {
-                                "status": "skipped",
-                                "reason": "model_not_loaded",
-                            }
-                            continue
-
                     result = module.add_documents(documents, ids)
                     results[module_name] = result
                 except Exception as e:
@@ -137,9 +128,96 @@ class ModuleManager:
         return {"status": "success", "details": results, "total_modules": len(results)}
 
     def search(self, query: str, top_k: int = 5, strategy: str = "auto") -> Dict:
-        if strategy == "auto" and self.active_router:
-            module_names = self.routers[self.active_router].route(query)
-        elif strategy == "all":
+        """
+        Основной метод поиска.
+
+        Стратегии:
+        - 'auto': использует каскадный поиск (BM25 -> E5) если E5 доступен
+        - 'cascade': явно использует каскадный поиск через E5
+        - 'bm25_only': только BM25
+        - 'e5_only': только E5 (семантический поиск)
+        - 'all': все модули + фьюжн
+        """
+
+        print(f"ModuleManager.search: запрос='{query}', стратегия='{strategy}', top_k={top_k}")
+
+        # Получаем ссылки на модули
+        bm25_module = self.search_modules.get("bm25")
+        e5_module = self.search_modules.get("e5_reranker")
+
+        # Определяем фактическую стратегию
+        if strategy == "auto":
+            # Автоматический выбор: если E5 готов, используем каскад, иначе только BM25
+            if e5_module and e5_module.is_fitted:
+                strategy = "cascade"
+            else:
+                strategy = "bm25_only"
+
+        # Выполняем поиск по выбранной стратегии
+        if strategy == "cascade":
+            # Каскадный поиск: используем E5 модуль (он уже содержит логику BM25+E5)
+            if not e5_module:
+                print(f"ModuleManager: E5 модуль не найден, fallback на BM25")
+                strategy = "bm25_only"
+            elif not e5_module.is_fitted:
+                print(f"ModuleManager: E5 не готов (is_fitted=False), fallback на BM25")
+                strategy = "bm25_only"
+            else:
+                print(f"ModuleManager: используем каскадный поиск (BM25 -> E5)")
+                results = e5_module.search(query, top_k=top_k)
+                return {
+                    "query": query,
+                    "strategy": "cascade",
+                    "modules_used": ["bm25", "e5_reranker"],
+                    "results": results,
+                }
+
+        if strategy == "bm25_only":
+            # Только BM25
+            if not bm25_module:
+                print(f"ModuleManager: BM25 модуль не найден!")
+                return {
+                    "query": query,
+                    "strategy": "bm25_only",
+                    "modules_used": [],
+                    "results": [],
+                    "error": "BM25 module not found",
+                }
+
+            print(f"ModuleManager: используем только BM25")
+            results = bm25_module.search(query, top_k=top_k)
+            return {
+                "query": query,
+                "strategy": "bm25_only",
+                "modules_used": ["bm25"],
+                "results": results,
+            }
+
+        if strategy == "e5_only":
+            # Только E5 (семантический поиск без BM25)
+            if not e5_module:
+                print(f"ModuleManager: E5 модуль не найден!")
+                return {
+                    "query": query,
+                    "strategy": "e5_only",
+                    "modules_used": [],
+                    "results": [],
+                    "error": "E5 module not found",
+                }
+
+            print(f"ModuleManager: используем только E5 (семантический поиск)")
+            results = e5_module.semantic_search(query, top_k=top_k)
+            return {
+                "query": query,
+                "strategy": "e5_only",
+                "modules_used": ["e5_reranker"],
+                "results": results,
+            }
+
+        # Стратегия 'all' или другие: используем фьюжн
+        print(f"ModuleManager: стратегия '{strategy}', используем фьюжн")
+
+        if strategy == "all":
             module_names = self.active_searchers.copy()
         elif isinstance(strategy, list):
             module_names = [name for name in strategy if name in self.active_searchers]
@@ -152,7 +230,10 @@ class ModuleManager:
                 module = self.search_modules[module_name]
                 try:
                     # Для E5 модулей передаем дополнительные параметры если нужно
-                    results = module.search(query, top_k * 3)
+                    if module_name == "e5_reranker":
+                        results = module.search(query, top_k * 3)
+                    else:
+                        results = module.search(query, top_k * 3)
                     all_results[module_name] = results
                 except Exception as e:
                     print(f"ошибка в модуле {module_name}: {e}")

@@ -25,6 +25,8 @@ dependencies = [
     "rank-bm25>=0.2.2",
     "nltk>=3.8.0",
     "pymorphy3>=2.0.0",
+    "scikit-learn>=1.7.2",
+    "scipy>=1.16.3",
 ]
 
 [project.optional-dependencies]

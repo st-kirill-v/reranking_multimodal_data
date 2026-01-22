@@ -161,9 +161,14 @@ class DatasetToRAG:
         for i in range(0, len(documents), batch_size):
             batch = documents[i : i + batch_size]
 
+            # Создай ID для каждого документа в батче
+            batch_ids = [f"doc_{i + j}" for j in range(len(batch))]
+
             try:
                 response = requests.post(
-                    self.documents_endpoint, json={"documents": batch}, timeout=30
+                    self.documents_endpoint,
+                    json={"documents": batch, "data": batch_ids},  # ← ДОБАВЬ ЭТУ СТРОКУ!
+                    timeout=30,
                 )
 
                 if response.status_code == 200:
