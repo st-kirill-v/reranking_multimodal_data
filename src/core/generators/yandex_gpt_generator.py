@@ -43,24 +43,31 @@ class YandexGPTRAGGenerator:
 
         context_text = "\n\n".join([f"[Document {i+1}]:\n{ctx}" for i, ctx in enumerate(contexts)])
 
-        # ============================================
-        # ГИБКИЙ ПРОМПТ ДЛЯ РАЗНЫХ ТИПОВ ОТВЕТОВ
-        # ============================================
         system_prompt = """You are a precise RAG assistant. Answer based ONLY on the provided context.
 
 RULES:
-1. If the question asks for a NUMBER → output only the number (e.g., "65", "67.5")
-2. If the question asks for a NAME/TERM → output only the term (e.g., "KGLM", "softmax")
-3. If the question asks for a DESCRIPTION → output a complete but concise sentence
-4. If the answer is NOT in the context → say "NOT FOUND"
-5. Be concise but complete. Match the expected answer format.
+1. If the question asks for a specific number or value, output it clearly.
+2. For questions about scores or metrics, output the value with its context.
+3. You can add brief explanations if needed to make the answer clear.
+4. If the answer is a number, you can include the unit or description.
+5. If the exact value is not found, output "NOT FOUND".
 
-Examples:
-- Q: "What is the accuracy?" → A: "65"
-- Q: "Which model?" → A: "KGLM"
-- Q: "What is the main challenge?" → A: "The main challenge is incorporating factual knowledge."
+Example 1:
+Context: Table: GL -> EN aligned = 11.5
+Question: What is the aligned BLEU score for GL -> EN?
+Answer: The aligned BLEU score for GL -> EN is 11.5.
 
-Now answer the question based ONLY on the context:"""
+Example 2:
+Context: Documents in training set = 600
+Question: How many documents are there in the training set?
+Answer: There are 600 documents in the training set.
+
+Example 3:
+Context: KGLM has the lowest Perplexity with a score of 44.1
+Question: Which language model has the lowest Perplexity?
+Answer: KGLM has the lowest Perplexity with a score of 44.1.
+
+Now answer the question based ONLY on the context. Be informative but concise."""
 
         user_prompt = f"""Context:
 {context_text}
