@@ -252,6 +252,7 @@ class BM25Module(BaseSearchModule):
             if os.path.exists(bm25_path):
                 with open(bm25_path, "rb") as f:
                     self.bm25 = pickle.load(f)
+                    self.is_fitted = True
 
             print(
                 f"{self.name}: загружено {len(self.documents)} документов (k1={self.k1}, b={self.b})"

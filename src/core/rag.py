@@ -1,5 +1,6 @@
 """
 Главный RAG движок с модульной архитектурой и LLM генерацией.
+Поддерживает текстовый и мультимодальный поиск.
 """
 
 from src.core.module_manager import ModuleManager
@@ -9,9 +10,11 @@ from src.core.modules.router_modules import DebugRouter
 from src.core.metrics.search_metrics import MetricsReporter
 from src.core.generators.yandex_gpt_generator import create_llm_generator
 from src.core.metrics.search_metrics import MetricsReporter, SearchMetrics
+from src.core.multimodal_search import MultimodalSearch  # новый импорт
 from typing import List, Dict, Any, Optional
 import torch
 import time
+from pathlib import Path
 
 
 class ModularRAG:
@@ -21,12 +24,33 @@ class ModularRAG:
         self.llm_generator = create_llm_generator("yandexgpt")
         self.metrics_reporter = MetricsReporter()
 
+        # Мультимодальный поиск
+        self.multimodal_search = None
+        self._init_multimodal()
+
         try:
             self._init_default_modules()
             self.manager.load_all()
             print("RAG система инициализирована.")
         except Exception as e:
             print(f"Ошибка инициализации RAG: {e}")
+
+    def _init_multimodal(self):
+        """Инициализация мультимодального поиска"""
+        try:
+            models_dir = Path("models/nemotron")
+            index_dir = Path("index")
+
+            if (models_dir / "embed-vl-1b-v2").exists() and index_dir.exists():
+                self.multimodal_search = MultimodalSearch(
+                    models_dir=str(models_dir), index_dir=str(index_dir)
+                )
+                print("Мультимодальный поиск инициализирован")
+            else:
+                print("Мультимодальный поиск не доступен (нет моделей или индекса)")
+        except Exception as e:
+            print(f"Ошибка инициализации мультимодального поиска: {e}")
+            self.multimodal_search = None
 
     def get_metrics_summary(self):
         """Получить сводку метрик."""
@@ -71,19 +95,16 @@ class ModularRAG:
     def search(
         self, query: str, n_results: int = 5, strategy: str = "auto", relevant_ids: List[str] = None
     ) -> Dict:
-        """Поиск с метриками и латентностью."""
+        """Текстовый поиск с метриками и латентностью."""
         import time
 
         start_time = time.time()
 
         try:
-            # Выполняем поиск
             result = self.manager.search(query, n_results, strategy)
 
-            # Время выполнения
             latency_ms = (time.time() - start_time) * 1000
 
-            # Форматируем результаты
             formatted_results = []
             for doc in result["results"]:
                 formatted_results.append(
@@ -92,11 +113,10 @@ class ModularRAG:
                         "content": doc.get("content", ""),
                         "score": doc.get("fusion_score", doc.get("score", 0.0)),
                         "module": doc.get("module", "unknown"),
-                        "method": doc.get("method", "unknown"),  # Добавляем метод
+                        "method": doc.get("method", "unknown"),
                     }
                 )
 
-            # Нормализация scores
             if formatted_results and len(formatted_results) > 1:
                 scores = [doc["score"] for doc in formatted_results]
                 max_score = max(scores)
@@ -111,18 +131,16 @@ class ModularRAG:
                 formatted_results.sort(key=lambda x: x["score"], reverse=True)
                 formatted_results = formatted_results[:n_results]
 
-            # Собираем метрики если есть ground truth
             if relevant_ids and hasattr(self, "metrics_reporter"):
                 retrieved_ids = [doc.get("id") for doc in formatted_results]
 
-                # Создаем relevance_scores (1.0 для релевантных, 0.0 для остальных)
                 relevance_scores = {}
                 for doc in formatted_results:
                     doc_id = doc.get("id")
                     relevance_scores[doc_id] = 1.0 if doc_id in relevant_ids else 0.0
 
                 self.metrics_reporter.add_query_result(
-                    query_id=query,  # или можно использовать хэш запроса
+                    query_id=query,
                     retrieved_ids=retrieved_ids,
                     relevant_ids=relevant_ids,
                     relevance_scores=relevance_scores,
@@ -133,7 +151,6 @@ class ModularRAG:
                 f"Поиск выполнен. Найдено результатов: {len(formatted_results)}, время: {latency_ms:.1f}мс"
             )
 
-            # Возвращаем результат с дополнительной информацией
             return {
                 "query": query,
                 "results": formatted_results,
@@ -151,6 +168,34 @@ class ModularRAG:
                 "results": [],
                 "error": str(e),
                 "latency_ms": round(latency_ms, 2),
+            }
+
+    def multimodal_search_pages(
+        self, query: str, n_results: int = 10, use_rerank: bool = True
+    ) -> Dict:
+        """Мультимодальный поиск по страницам документов"""
+        if not self.multimodal_search:
+            return {
+                "query": query,
+                "results": [],
+                "error": "Мультимодальный поиск не инициализирован",
+                "search_time": 0,
+                "total_found": 0,
+                "rerank_used": use_rerank,
+            }
+
+        try:
+            results = self.multimodal_search.search(query, n_results, use_rerank)
+            return results
+        except Exception as e:
+            print(f"Ошибка мультимодального поиска: {e}")
+            return {
+                "query": query,
+                "results": [],
+                "error": str(e),
+                "search_time": 0,
+                "total_found": 0,
+                "rerank_used": use_rerank,
             }
 
     def generate_answer(self, query: str, top_k: int = 3, min_score: float = 0.1) -> Dict:
@@ -200,7 +245,7 @@ class ModularRAG:
                 return {
                     "query": query,
                     "answer": "No relevant information found.",
-                    "sources": formatted_sources,  # Теперь будет пустой список
+                    "sources": formatted_sources,
                     "total_found": len(search_results),
                     "metrics": {
                         "search_time_ms": round(latency_ms, 2),
@@ -232,7 +277,7 @@ class ModularRAG:
             result = {
                 "query": query,
                 "answer": answer,
-                "sources": formatted_sources,  # Уже создан
+                "sources": formatted_sources,
                 "total_found": len(search_results),
                 "used_sources": len(filtered_results),
                 "generator_info": self.llm_generator.get_info(),
@@ -264,6 +309,14 @@ class ModularRAG:
     def get_info(self) -> Dict:
         info = self.manager.get_info()
         info["llm_generator"] = self.llm_generator.get_info()
+
+        # Добавляем информацию о мультимодальном поиске
+        info["multimodal"] = {
+            "available": self.multimodal_search is not None,
+            "index_exists": Path("index/pages.index").exists() if self.multimodal_search else False,
+            "model": "nvidia/llama-nemotron-embed-vl-1b-v2" if self.multimodal_search else None,
+        }
+
         print("Информация о системе получена.")
         return info
 
@@ -384,6 +437,7 @@ class ModularRAG:
             "active_modules": list(self.manager.active_searchers),
             "modules": module_status,
             "llm_loaded": self.llm_generator is not None,
+            "multimodal_available": self.multimodal_search is not None,
         }
 
     def add_search_module(self, module_type: str, name: str, **kwargs) -> Dict:

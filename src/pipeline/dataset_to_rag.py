@@ -12,7 +12,7 @@ import pypdf
 
 
 class DatasetToRAG:
-    def __init__(self, api_url: str = "http://localhost:8000"):
+    def __init__(self, api_url: str = "http://localhost:8080"):
         self.api_url = api_url
         self.documents_endpoint = f"{api_url}/documents"
         self.info_endpoint = f"{api_url}/info"
@@ -151,7 +151,7 @@ class DatasetToRAG:
 
         return documents
 
-    def add_to_rag(self, documents: List[str], batch_size: int = 100) -> int:
+    def add_to_rag(self, documents: List[str], batch_size: int = 5000) -> int:
         if not documents:
             print("нет документов для добавления")
             return 0
@@ -167,7 +167,7 @@ class DatasetToRAG:
             try:
                 response = requests.post(
                     self.documents_endpoint,
-                    json={"documents": batch, "data": batch_ids},  # ← ДОБАВЬ ЭТУ СТРОКУ!
+                    json={"documents": batch, "data": batch_ids},
                     timeout=30,
                 )
 
