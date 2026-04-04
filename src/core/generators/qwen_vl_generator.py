@@ -200,6 +200,14 @@ RULES:
 3. Do not output just the number or just the term.
 4. If calculation is needed, perform it and include the result in the sentence.
 5. NEVER use commas in numbers: write 10000 not 10,000.
+6. When extracting values from tables: verify the exact row name and column name match the question. Double-check the value before outputting.
+7. When extracting terms from tables: compare your extracted term with the exact text in the table cell. Ensure it matches.
+8. If the question contains words 'photo', 'image', or 'picture': look for visual content in the image. If no relevant visual information exists, return 'NOT FOUND'.
+9. Pay attention to units of measurement. Check the question to understand what unit is requested (percentage, number, million, etc.). Output the value in the requested unit.
+10. When the answer is a percentage, include the percent sign in the output.
+11. When the question asks for a difference or change, calculate the absolute difference and include the sign if negative.
+12. If the table contains multiple rows with similar names (like 'Multi Task' and '+Coreference'), prefer the row that exactly matches the keyword in the question.
+
 
 Example 1 (number):
 Image: [Table: Countries and their capitals populations: Tokyo=14M, Delhi=32M, Shanghai=24M]
@@ -248,7 +256,7 @@ Now answer the question following the same format."""
 
             with torch.no_grad():
                 outputs = self.model.generate(
-                    **inputs, max_new_tokens=300, temperature=0.5, do_sample=True, top_p=0.9
+                    **inputs, max_new_tokens=300, temperature=0.3, do_sample=True, top_p=0.9
                 )
 
             answer = self.processor.decode(outputs[0], skip_special_tokens=True)
@@ -269,7 +277,7 @@ Now answer the question following the same format."""
             "name": "qwen3-vl-table-extractor",
             "model": "Qwen/Qwen3-VL-8B-Instruct",
             "device": self.device,
-            "temperature": 0.5,
+            "temperature": 0.3,
             "max_tokens": 300,
             "license": "Apache 2.0",
         }

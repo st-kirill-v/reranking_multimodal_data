@@ -191,7 +191,7 @@ def evaluate_rag(questions, limit=308):
             }
         )
 
-        print(f"  Generated: {answer[:120]}...")
+        print(f"  Generated: {answer[:200]}...")
         print(f"  Expected: {q['expected_answer']}")
         print(f"  Exact: {exact_match}, F1: {f1_score:.3f} | Time: {elapsed_time:.2f}s")
 
