@@ -11,7 +11,7 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 from scripts.full_pipeline import full_search
-from src.core.generators.qwen_vl_table_generator import create_table_generator
+from src.core.generators.qwen_vl_generator import create_table_generator
 from PIL import Image
 
 device = "cuda" if torch.cuda.is_available() else "cpu"

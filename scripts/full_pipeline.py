@@ -1,7 +1,7 @@
 import torch
 from transformers import AutoModel, AutoProcessor, AutoModelForSequenceClassification
 from pathlib import Path
-from src.core.generators.qwen_vl_table_generator import create_table_generator
+from src.core.generators.qwen_vl_generator import create_table_generator
 from src.core.modules.bm25_module import BM25Module
 import faiss
 import json
