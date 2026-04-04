@@ -1,6 +1,5 @@
 import torch
 from transformers import Qwen3VLForConditionalGeneration, AutoProcessor
-from peft import PeftModel
 from PIL import Image
 from typing import List, Dict, Any
 import os
@@ -8,39 +7,20 @@ import re
 
 
 class QwenVLTableGenerator:
-    def __init__(self, device: str = None, use_lora: bool = True, lora_path: str = None):
+    def __init__(self, device: str = None):
         if device is None:
             self.device = "cuda" if torch.cuda.is_available() else "cpu"
         else:
             self.device = device
 
-        self.use_lora = use_lora
-
-        if lora_path is None:
-            self.lora_path = "/home/user-13/reranking_multimodal_data/models/qwen2vl_rag_lora"
-        else:
-            self.lora_path = lora_path
-
         print(f"Loading Qwen3-VL-8B-Instruct on {self.device}")
 
-        from transformers import Qwen3VLForConditionalGeneration, AutoProcessor
-
-        base_model = Qwen3VLForConditionalGeneration.from_pretrained(
+        self.model = Qwen3VLForConditionalGeneration.from_pretrained(
             "Qwen/Qwen3-VL-8B-Instruct",
             torch_dtype=torch.bfloat16,
             trust_remote_code=True,
             device_map=self.device,
         ).eval()
-
-        if use_lora and os.path.exists(self.lora_path):
-            print(f"Loading LoRA weights from {self.lora_path}")
-            self.model = PeftModel.from_pretrained(base_model, self.lora_path)
-            print("LoRA weights loaded successfully")
-        else:
-            if use_lora:
-                print(f"LoRA path not found: {self.lora_path}")
-                print("Using base model without LoRA")
-            self.model = base_model
 
         self.processor = AutoProcessor.from_pretrained(
             "Qwen/Qwen3-VL-8B-Instruct", trust_remote_code=True
@@ -278,8 +258,6 @@ Now answer the question following the same format."""
 
             answer = answer.replace("Answer:", "").replace("answer:", "").strip()
 
-            # answer = self._normalize_answer(answer, query)
-
             if answer and answer != "NOT FOUND" and len(answer) > 0:
                 return answer
 
@@ -294,14 +272,12 @@ Now answer the question following the same format."""
             "temperature": 0.5,
             "max_tokens": 300,
             "license": "Apache 2.0",
-            "use_lora": self.use_lora,
-            "lora_path": self.lora_path if self.use_lora else None,
         }
 
 
-def create_table_generator(device: str = None, use_lora: bool = True, lora_path: str = None):
-    return QwenVLTableGenerator(device=device, use_lora=use_lora, lora_path=lora_path)
+def create_table_generator(device: str = None):
+    return QwenVLTableGenerator(device=device)
 
 
-def create_qwen_generator(device: str = None, use_lora: bool = True, lora_path: str = None):
-    return QwenVLTableGenerator(device=device, use_lora=use_lora, lora_path=lora_path)
+def create_qwen_generator(device: str = None):
+    return QwenVLTableGenerator(device=device)

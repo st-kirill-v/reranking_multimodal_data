@@ -17,13 +17,8 @@ from PIL import Image
 device = "cuda" if torch.cuda.is_available() else "cpu"
 print(f"Using device: {device}")
 
-print("Loading Table Extractor (Qwen2-VL fine-tuned for tables)...")
-qwen = create_table_generator(device=device, use_lora=False)
-
-if hasattr(qwen.model, "peft_config"):
-    print("LoRA is active! Using fine-tuned table extractor.")
-else:
-    print("LoRA is not loaded! Using base model.")
+print("Loading Qwen3-VL...")
+qwen = create_table_generator(device=device)
 
 data_path = project_root / "data" / "datasets" / "docbench"
 
@@ -211,7 +206,7 @@ def print_metrics(results, latencies):
     exact_matches = [r["exact"] for r in results]
     f1_scores = [r["f1"] for r in results]
 
-    print("\nFinal evaluation results (Table Extractor)")
+    print("\nFinal evaluation results Qwen3")
 
     print(f"\nTotal questions evaluated: {len(results)}")
 

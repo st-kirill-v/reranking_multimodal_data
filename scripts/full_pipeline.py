@@ -91,9 +91,9 @@ else:
     bm25.add_documents(documents, doc_ids)
     bm25.save(str(cache_dir))
 
-# Загрузка Qwen2-VL генератора на GPU
-print("Loading Qwen2-VL generator with LoRA...")
-qwen_generator = create_table_generator(device=device_llm, use_lora=False)
+# Загрузка Qwen3-VL генератора на GPU
+print("Loading Qwen3-VL generator")
+qwen_generator = create_table_generator(device=device_llm)
 
 
 # Функция расширения соседними страницами
@@ -243,10 +243,10 @@ def full_pipeline(query, top_k_initial=400, top_k_rerank=150, final_k=30):
     if not page_images:
         return "NOT FOUND", time.time() - start_time
 
-    print(f"\nLoaded {len(page_images)} pages for Qwen2-VL (including neighbors)")
+    print(f"\nLoaded {len(page_images)} pages for Qwen3-VL (including neighbors)")
 
     # Генерация ответа на GPU
-    print(f"\nGenerating answer with Qwen2-VL...")
+    print(f"\nGenerating answer with Qwen3-VL...")
     answer = qwen_generator.generate_answer(query, page_images)
 
     total_time = time.time() - start_time
