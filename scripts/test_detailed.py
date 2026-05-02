@@ -29,13 +29,17 @@ cache_dir = project_root / "cache" / "modules"
 docling_dir = project_root / "data" / "docling_markdown_fast"
 
 
-class TimeoutError(Exception):
+class DetailedTimeoutError(Exception):
     pass
 
 
 def timeout_handler(signum, frame):
-    raise TimeoutError("Generation took too long")
+    raise DetailedTimeoutError("Generation took too long")
 
+
+# ============================================
+# КЛЮЧЕВЫЕ СЛОВА
+# ============================================
 
 TABLE_KEYWORDS = [
     "table",
@@ -144,7 +148,11 @@ def extract_tables_from_markdown(markdown_text, max_chars=500):
     return result
 
 
-print("Loading Qwen3-VL-Embedding on CPU...")
+print("=" * 80)
+print("LOADING MODELS")
+print("=" * 80)
+
+print("1. Loading Qwen3-VL-Embedding on CPU...")
 embed_model = AutoModel.from_pretrained(
     "Qwen/Qwen3-VL-Embedding-8B",
     torch_dtype=torch.bfloat16,
@@ -155,22 +163,25 @@ embed_processor = AutoProcessor.from_pretrained(
     "Qwen/Qwen3-VL-Embedding-8B", trust_remote_code=True
 )
 
-print("Loading page index...")
+print("2. Loading page index...")
 page_index = faiss.read_index(str(index_dir / "pages_qwen3.index"))
 with open(index_dir / "metadata_qwen3.json", "r", encoding="utf-8") as f:
     page_metadata = json.load(f)
+print(f"   Page index: {page_index.ntotal} vectors")
 
-print("Loading text index...")
+print("3. Loading text index...")
 text_index = faiss.read_index(str(project_root / "index_text_full" / "index.faiss"))
 with open(project_root / "index_text_full" / "metadata.pkl", "rb") as f:
     text_metadata = pickle.load(f)
+print(f"   Text index: {text_index.ntotal} vectors")
 
-print("Loading image index...")
+print("4. Loading image index...")
 image_index = faiss.read_index(str(project_root / "index_images_full" / "index.faiss"))
 with open(project_root / "index_images_full" / "metadata.pkl", "rb") as f:
     image_metadata = pickle.load(f)
+print(f"   Image index: {image_index.ntotal} vectors")
 
-print("Loading Nemotron Rerank...")
+print("5. Loading Nemotron Rerank on GPU...")
 rerank_model = AutoModelForSequenceClassification.from_pretrained(
     "nvidia/llama-nemotron-rerank-vl-1b-v2",
     torch_dtype=torch.bfloat16,
@@ -185,7 +196,7 @@ rerank_processor = AutoProcessor.from_pretrained(
     rerank_max_length=2048,
 )
 
-print("Loading BM25...")
+print("6. Loading BM25...")
 bm25 = BM25Module(name="bm25", language="multilingual", k1=2.5, b=0.9)
 bm25_path = cache_dir / "bm25"
 if bm25_path.exists():
@@ -206,9 +217,14 @@ else:
                     doc_ids.append(doc_id)
     bm25.add_documents(documents, doc_ids)
     bm25.save(str(cache_dir))
+print("   BM25 loaded")
 
-print("Loading Qwen3-VL generator...")
+print("7. Loading Qwen3-VL generator...")
 qwen_generator = create_table_generator(device=device_llm)
+
+print("\n" + "=" * 80)
+print("MODELS LOADED")
+print("=" * 80 + "\n")
 
 
 def encode_query(query):
@@ -222,6 +238,7 @@ def encode_query(query):
 
 
 def search_pages(query, emb, top_k=30):
+    start = time.time()
     bm25_results = bm25.search(query, top_k=400)
     scores, indices = page_index.search(emb, 400)
 
@@ -261,10 +278,13 @@ def search_pages(query, emb, top_k=30):
                     "type": "page",
                 }
 
-    return sorted(combined.values(), key=lambda x: x["score"], reverse=True)[:top_k]
+    candidates = sorted(combined.values(), key=lambda x: x["score"], reverse=True)[:top_k]
+    elapsed = time.time() - start
+    return candidates, elapsed
 
 
 def search_text(emb, top_k=50):
+    start = time.time()
     scores, indices = text_index.search(emb, top_k)
     results = []
     for rank, idx in enumerate(indices[0]):
@@ -287,10 +307,12 @@ def search_text(emb, top_k=50):
                 "text": text_content,
             }
         )
-    return results
+    elapsed = time.time() - start
+    return results, elapsed
 
 
 def search_images(emb, top_k=50):
+    start = time.time()
     scores, indices = image_index.search(emb, top_k)
     results = []
     for rank, idx in enumerate(indices[0]):
@@ -307,10 +329,12 @@ def search_images(emb, top_k=50):
                 "metadata": meta,
             }
         )
-    return results
+    elapsed = time.time() - start
+    return results, elapsed
 
 
 def expand_with_neighbors(candidates, max_pages=15):
+    start = time.time()
     expanded = []
     for cand in candidates:
         expanded.append(cand)
@@ -331,12 +355,14 @@ def expand_with_neighbors(candidates, max_pages=15):
         key = f"{cand['folder']}_{cand.get('page', 0)}_{cand['type']}"
         if key not in unique:
             unique[key] = cand
-    return list(unique.values())[:max_pages]
+    elapsed = time.time() - start
+    return list(unique.values())[:max_pages], elapsed
 
 
-def rerank_candidates(query, candidates, model, processor, device):
+def rerank_candidates(query, candidates, model, processor, device, name=""):
     if not candidates:
-        return []
+        return [], 0
+    start = time.time()
     reranked = []
     batch_size = 4
     for i in range(0, len(candidates), batch_size):
@@ -375,74 +401,166 @@ def rerank_candidates(query, candidates, model, processor, device):
                 batch[j]["rerank_score"] = float(torch.sigmoid(logit).item())
                 reranked.append(batch[j])
 
-    return sorted(reranked, key=lambda x: x["rerank_score"], reverse=True)
+    result = sorted(reranked, key=lambda x: x["rerank_score"], reverse=True)
+    elapsed = time.time() - start
+    return result, elapsed
 
 
-def full_pipeline_v2(query, timeout_seconds=90):
-    start_time = time.time()
+def full_pipeline_detailed(query, timeout_seconds=200):
+    print("\n" + "=" * 80)
+    print(f"QUESTION: {query}")
+    print("=" * 80)
 
+    total_start = time.time()
+    timing = {}
+
+    # Тип вопроса
     q_type = determine_question_type(query)
+    print(f"\n[STEP 1] Question type detection: {q_type}")
 
+    # Кодирование запроса
+    t0 = time.time()
     query_emb = encode_query(query)
+    timing["encode_query"] = time.time() - t0
+    print(f"  -> Encode query: {timing['encode_query']:.2f}s")
 
-    page_results = search_pages(query, query_emb, top_k=30)
-    text_results = search_text(query_emb, top_k=50)
-    image_results = search_images(query_emb, top_k=50)
+    # Поиск страниц
+    t0 = time.time()
+    page_results, t_search_pages = search_pages(query, query_emb, top_k=30)
+    timing["search_pages"] = t_search_pages
+    print(f"\n[STEP 2] Search pages (BM25 + Vector + RRF): {timing['search_pages']:.2f}s")
+    print(f"  -> Found {len(page_results)} pages")
 
-    page_reranked = rerank_candidates(
-        query, page_results, rerank_model, rerank_processor, device_rerank
-    )
-    text_reranked = rerank_candidates(
-        query, text_results, rerank_model, rerank_processor, device_rerank
-    )
-    image_reranked = rerank_candidates(
-        query, image_results, rerank_model, rerank_processor, device_rerank
-    )
+    # Поиск текста
+    t0 = time.time()
+    text_results, t_search_text = search_text(query_emb, top_k=50)
+    timing["search_text"] = t_search_text
+    print(f"\n[STEP 3] Search text index: {timing['search_text']:.2f}s")
+    print(f"  -> Found {len(text_results)} text blocks")
 
+    # Поиск изображений
+    t0 = time.time()
+    image_results, t_search_images = search_images(query_emb, top_k=50)
+    timing["search_images"] = t_search_images
+    print(f"\n[STEP 4] Search image index: {timing['search_images']:.2f}s")
+    print(f"  -> Found {len(image_results)} images")
+
+    # Реранкинг страниц
+    t0 = time.time()
+    page_reranked, t_rerank_pages = rerank_candidates(
+        query, page_results, rerank_model, rerank_processor, device_rerank, "pages"
+    )
+    timing["rerank_pages"] = t_rerank_pages
+    print(f"\n[STEP 5] Rerank pages (Nemotron): {timing['rerank_pages']:.2f}s")
+    print(f"  -> Reranked {len(page_reranked)} pages")
+    for i, p in enumerate(page_reranked[:5]):
+        print(
+            f"     Rank {i+1}: folder={p['folder']}, page={p.get('page', 'N/A')}, score={p.get('rerank_score', 0):.4f}"
+        )
+
+    # Реранкинг текста
+    t0 = time.time()
+    text_reranked, t_rerank_text = rerank_candidates(
+        query, text_results, rerank_model, rerank_processor, device_rerank, "text"
+    )
+    timing["rerank_text"] = t_rerank_text
+    print(f"\n[STEP 6] Rerank text blocks: {timing['rerank_text']:.2f}s")
+    print(f"  -> Reranked {len(text_reranked)} text blocks")
+
+    # Реранкинг изображений
+    t0 = time.time()
+    image_reranked, t_rerank_images = rerank_candidates(
+        query, image_results, rerank_model, rerank_processor, device_rerank, "images"
+    )
+    timing["rerank_images"] = t_rerank_images
+    print(f"\n[STEP 7] Rerank images: {timing['rerank_images']:.2f}s")
+    print(f"  -> Reranked {len(image_reranked)} images")
+
+    # Расширение соседними страницами
     top_pages = page_reranked[:3]
-    expanded_pages = expand_with_neighbors(top_pages, max_pages=15)
+    t0 = time.time()
+    expanded_pages, t_expand = expand_with_neighbors(top_pages, max_pages=15)
+    timing["expand_pages"] = t_expand
+    print(f"\n[STEP 8] Expand with neighbors: {timing['expand_pages']:.2f}s")
+    print(f"  -> Top 3 pages + neighbors = {len(expanded_pages)} pages")
 
+    # Загрузка изображений страниц
+    t0 = time.time()
     context_images = []
-    context_texts = []
-
     for cand in expanded_pages[:15]:
         try:
             img = Image.open(cand["path"]).convert("RGB")
             context_images.append(img)
-        except:
-            continue
+        except Exception as e:
+            print(f"     Warning: could not load {cand.get('path', 'unknown')}: {e}")
+    timing["load_images"] = time.time() - t0
+    print(f"\n[STEP 9] Load page images: {timing['load_images']:.2f}s")
+    print(f"  -> Loaded {len(context_images)} images")
+    print(f"  -> Each image size: {context_images[0].size if context_images else 'N/A'}")
 
+    # Сбор текстового контекста (таблиц)
+    context_texts = []
+    text_content_preview = ""
     if q_type == "table":
+        t0 = time.time()
         for cand in text_reranked[:2]:
             markdown_text = cand.get("text", "")
             if markdown_text:
                 tables = extract_tables_from_markdown(markdown_text, max_chars=500)
                 for table in tables[:1]:
                     context_texts.append(table)
+        timing["extract_tables"] = time.time() - t0
+        print(f"\n[STEP 10] Extract tables from text blocks: {timing['extract_tables']:.2f}s")
+        print(f"  -> Extracted {len(context_texts)} tables")
+        if context_texts:
+            text_content_preview = context_texts[0][:300]
+            print(f"  -> Table preview (first 300 chars):\n{text_content_preview}...")
     elif q_type == "image":
+        t0 = time.time()
         for cand in image_reranked[:3]:
             try:
                 img = Image.open(cand["path"]).convert("RGB")
                 context_images.append(img)
             except:
                 continue
+        timing["add_images"] = time.time() - t0
+        print(f"\n[STEP 10] Add images for image question: {timing['add_images']:.2f}s")
+        print(f"  -> Added {len(image_reranked[:3])} images")
     elif q_type == "formula":
+        t0 = time.time()
         for cand in image_reranked[:3]:
             try:
                 img = Image.open(cand["path"]).convert("RGB")
                 context_images.append(img)
             except:
                 continue
+        timing["add_formulas"] = time.time() - t0
+        print(f"\n[STEP 10] Add formula images: {timing['add_formulas']:.2f}s")
+        print(f"  -> Added {len(image_reranked[:3])} formula images")
 
-    if not context_images and not context_texts:
-        return "NOT FOUND", time.time() - start_time
+    # Итоговый контекст
+    print("\n" + "=" * 80)
+    print("FINAL CONTEXT SENT TO VLM")
+    print("=" * 80)
+    print(f"  Images (PNG): {len(context_images)}")
+    print(f"  Text chunks (Markdown tables): {len(context_texts)}")
+    if text_content_preview:
+        print(f"\n  Text content preview:\n{text_content_preview}")
+    print("\n  Images list:")
+    for i, img in enumerate(context_images[:5]):
+        print(f"    Image {i+1}: size {img.size}")
+
+    # Генерация ответа
+    print("\n" + "=" * 80)
+    print("GENERATING ANSWER")
+    print("=" * 80)
 
     signal.signal(signal.SIGALRM, timeout_handler)
     signal.alarm(timeout_seconds)
 
+    t0 = time.time()
     try:
         if context_images and context_texts:
-            # Объединяем список таблиц в одну строку
             combined_text = "\n\n".join(context_texts)
             answer = qwen_generator.generate_answer(query, context_images, combined_text)
         elif context_images:
@@ -450,20 +568,115 @@ def full_pipeline_v2(query, timeout_seconds=90):
         else:
             combined_text = "\n\n".join(context_texts)
             answer = qwen_generator.generate_answer(query, None, combined_text)
-    except TimeoutError:
+        timing["generation"] = time.time() - t0
+        print(f"\n  Generation time: {timing['generation']:.2f}s")
+        print(f"  Generated answer: {answer}")
+    except DetailedTimeoutError:
+        timing["generation"] = time.time() - t0
         answer = "TIMEOUT"
+        print(f"\n  Generation time: {timing['generation']:.2f}s (TIMEOUT)")
+        print(f"  Generated answer: TIMEOUT")
     finally:
         signal.alarm(0)
 
-    return answer, time.time() - start_time
+    total_time = time.time() - total_start
+    timing["total"] = total_time
+
+    print("\n" + "=" * 80)
+    print("TIMING SUMMARY")
+    print("=" * 80)
+    for step, t in timing.items():
+        print(f"  {step:20s}: {t:6.2f}s")
+
+    return (
+        answer,
+        timing,
+        {
+            "question_type": q_type,
+            "num_images": len(context_images),
+            "num_texts": len(context_texts),
+            "generated_answer": answer,
+        },
+    )
 
 
-if __name__ == "__main__":
-    test_queries = [
-        "What is the aligned BLEU score for GL → EN?",
+# ============================================
+# ТЕСТОВЫЕ ВОПРОСЫ (10 штук с известными ответами)
+# ============================================
+
+test_questions = [
+    ("What is the top-1 accuracy of the Oracle KGLM on birthdate prediction?", "65%"),
+    ("How many documents are there in the training set of the Linked WikiText-2 Corpus?", "600"),
+    ("Which language model has the lowest Perplexity (PPL) according to Table 3?", "KGLM"),
+    (
+        "Which dataset experienced the largest decrease in BLEU score after alignment according to Table 4?",
+        "GL→EN",
+    ),
+    (
+        "What is the total number of sentences in the training sets for Romance languages as given in Table 1?",
+        "61802",
+    ),
+    (
         "What is the performance score for Entity Recognition when multitasked with Coreference Resolution?",
-        "Which model achieved the highest accuracy on the random split according to Table 5?",
-    ]
-    for q in test_queries:
-        answer, _ = full_pipeline_v2(q)
-        print(f"FINAL ANSWER: {answer}")
+        "67.5",
+    ),
+    ("Which model has the highest F1 score for entity recognition on the Test set?", "SciIE"),
+    ("Which model achieved the highest F1 score in span identification?", "SciIE"),
+    (
+        "What is the test set accuracy of BERT (Large) as reported in the best run according to Table 1?",
+        "77%",
+    ),
+    (
+        "What function is used to determine a probability distribution over the two warrants in the proposed architecture?",
+        "softmax",
+    ),
+]
+
+print("\n" + "=" * 80)
+print("STARTING DETAILED TEST ON 10 QUESTIONS")
+print("=" * 80)
+
+all_results = []
+
+for i, (question, expected) in enumerate(test_questions, 1):
+    print(f"\n\n{'#' * 80}")
+    print(f"QUESTION {i}/10")
+    print(f"{'#' * 80}")
+
+    answer, timing, info = full_pipeline_detailed(question, timeout_seconds=200)
+
+    all_results.append(
+        {
+            "question": question,
+            "expected": expected,
+            "generated": answer,
+            "timing": timing,
+            "info": info,
+        }
+    )
+
+    print(f"\n{'=' * 60}")
+    print(f"RESULT {i}/10")
+    print(f"  Expected: {expected}")
+    print(f"  Generated: {answer}")
+    print(f"  Total time: {timing['total']:.2f}s")
+    print(f"{'=' * 60}")
+
+print("\n\n" + "=" * 80)
+print("FINAL SUMMARY")
+print("=" * 80)
+
+total_times = []
+for r in all_results:
+    total_times.append(r["timing"]["total"])
+    print(f"\nQ: {r['question'][:80]}...")
+    print(f"  Expected: {r['expected']}")
+    print(f"  Generated: {r['generated']}")
+    print(f"  Time: {r['timing']['total']:.2f}s")
+    print(f"  Images: {r['info']['num_images']}, Texts: {r['info']['num_texts']}")
+
+avg_time = sum(total_times) / len(total_times)
+print(f"\n{'=' * 80}")
+print(f"Average time per question: {avg_time:.2f}s")
+print(f"Total time for 10 questions: {sum(total_times):.2f}s")
+print(f"{'=' * 80}")

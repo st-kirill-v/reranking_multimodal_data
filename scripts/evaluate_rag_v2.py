@@ -12,7 +12,6 @@ sys.path.insert(0, str(project_root))
 
 from scripts.full_pipeline_v2 import full_pipeline_v2
 from src.core.generators.qwen_vl_generator import create_table_generator
-from PIL import Image
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 print(f"Using device: {device}")
@@ -45,7 +44,7 @@ def load_all_questions():
 
 
 def compute_similarity(generated, expected):
-    if generated in ["NOT FOUND", "ERROR"]:
+    if generated in ["NOT FOUND", "ERROR", "TIMEOUT"]:
         return 0.0, 0.0
 
     gen = generated.lower().strip()
@@ -53,12 +52,13 @@ def compute_similarity(generated, expected):
 
     exact = (
         1.0
-        if gen.replace(",", "").replace(" ", "") == exp.replace(",", "").replace(" ", "")
+        if gen.replace(",", "").replace(" ", "").replace("%", "")
+        == exp.replace(",", "").replace(" ", "").replace("%", "")
         else 0.0
     )
 
-    gen_clean = gen.replace(",", "").replace(" ", "")
-    exp_clean = exp.replace(",", "").replace(" ", "")
+    gen_clean = gen.replace(",", "").replace(" ", "").replace("%", "")
+    exp_clean = exp.replace(",", "").replace(" ", "").replace("%", "")
 
     gen_numbers = re.findall(r"\d+(?:\.\d+)?", gen_clean)
     exp_numbers = re.findall(r"\d+(?:\.\d+)?", exp_clean)
@@ -125,13 +125,12 @@ def compute_similarity(generated, expected):
     return exact, f1
 
 
-def evaluate_rag_v2(questions, limit=10):
+def evaluate_rag_v2(questions):
     results = []
     latencies = []
+    total_questions = len(questions)
 
-    total_questions = min(len(questions), limit)
-
-    for i, q in enumerate(questions[:total_questions], start=1):
+    for i, q in enumerate(questions, start=1):
         print(f"\n[{i}/{total_questions}] {q['question'][:80]}...")
 
         start_time = time.time()
@@ -140,7 +139,8 @@ def evaluate_rag_v2(questions, limit=10):
             answer, total_time = full_pipeline_v2(q["question"])
         except Exception as e:
             print(f"  Pipeline error: {e}")
-            continue
+            answer = "ERROR"
+            total_time = time.time() - start_time
 
         elapsed_time = time.time() - start_time
         latencies.append(elapsed_time)
@@ -175,7 +175,9 @@ def print_metrics(results, latencies):
     exact_matches = [r["exact"] for r in results]
     f1_scores = [r["f1"] for r in results]
 
-    print("\nFinal evaluation results Qwen3 V2 (multimodal search)")
+    print("\n" + "=" * 80)
+    print("Final evaluation results Qwen3 V2 (multimodal search)")
+    print("=" * 80)
 
     print(f"\nTotal questions evaluated: {len(results)}")
 
@@ -206,9 +208,7 @@ def save_results(results, output_path):
 
 
 if __name__ == "__main__":
-
     print("Starting rag evaluation with multimodal search (V2)")
-
     print("\nLoading questions from dataset...")
     all_questions = load_all_questions()
 
@@ -217,12 +217,12 @@ if __name__ == "__main__":
         sys.exit(1)
 
     print(f"Loaded {len(all_questions)} multimodal questions.")
-    print("Evaluating first 10 questions only...")
+    print("Evaluating all questions...")
 
     print("\nStarting evaluation pipeline...")
 
     try:
-        eval_results, eval_latencies = evaluate_rag_v2(all_questions, limit=10)
+        eval_results, eval_latencies = evaluate_rag_v2(all_questions)
 
         print_metrics(eval_results, eval_latencies)
 
