@@ -1,24 +1,36 @@
 import torch
-from transformers import Qwen3VLForConditionalGeneration, AutoProcessor
+from transformers import Qwen3VLForConditionalGeneration, AutoProcessor, BitsAndBytesConfig
 from PIL import Image
 from typing import List, Dict, Any
 import time
 
 
 class QwenVLTableGenerator:
-    def __init__(self, device: str = None):
+    def __init__(self, device: str = None, timeout_seconds: int = 180):
+        self.timeout_seconds = timeout_seconds
+
         if device is None:
             self.device = "cuda" if torch.cuda.is_available() else "cpu"
         else:
             self.device = device
 
         print(f"Loading Qwen3-VL-8B-Instruct on {self.device}")
+        print(f"VLM timeout set to {self.timeout_seconds} seconds")
+
+        quantization_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_compute_dtype=torch.float16,
+            bnb_4bit_use_double_quant=True,
+            bnb_4bit_quant_type="nf4",
+        )
 
         self.model = Qwen3VLForConditionalGeneration.from_pretrained(
             "Qwen/Qwen3-VL-8B-Instruct",
-            torch_dtype=torch.bfloat16,
+            torch_dtype=torch.float16,
             trust_remote_code=True,
-            device_map=self.device,
+            device_map="auto",
+            quantization_config=quantization_config,
+            low_cpu_mem_usage=True,
         ).eval()
 
         self.processor = AutoProcessor.from_pretrained(
@@ -43,49 +55,57 @@ class QwenVLTableGenerator:
         if not context_images and not context_text:
             return "NOT FOUND"
 
-        system_prompt = """You are a precise RAG assistant. Extract or calculate answers from tables and text.
+        system_prompt = """You are a precise RAG assistant. Your task is to extract or calculate information from images (tables, charts, text, or photos).
+
+ANALYSIS STEP:
+Before providing the final answer, perform these steps internally:
+1. Locate the specific table or text block relevant to the question.
+2. Identify the EXACT row header and column header.
+3. If calculation is required, write out the formula: (Value A [op] Value B = Result).
+4. If a photo is involved, scan for specific objects and their relative positions.
 
 RULES:
-1. Output a COMPLETE sentence that answers the question.
-2. Include the exact value in the sentence.
-3. Do not output just the number or just the term.
-4. If calculation is needed, perform it and include the result in the sentence.
-5. NEVER use commas in numbers: write 10000 not 10,000.
-6. When extracting values from tables: verify the exact row name and column name match the question. Double-check the value before outputting.
-7. When extracting terms from tables: compare your extracted term with the exact text in the table cell. Ensure it matches.
-8. If the question contains words 'photo', 'image', or 'picture': look for visual content in the image. If no relevant visual information exists, return 'NOT FOUND'.
-9. Pay attention to units of measurement. Check the question to understand what unit is requested (percentage, number, million, etc.). Output the value in the requested unit.
-10. When the answer is a percentage, include the percent sign in the output.
-11. When the question asks for a difference or change, calculate the absolute difference and include the sign if negative.
-12. If the table contains multiple rows with similar names (like 'Multi Task' and '+Coreference'), prefer the row that exactly matches the keyword in the question.
+1. ANSWER FORMAT: Output exactly one COMPLETE sentence. No preamble.
+2. PRECISION: Use the exact values and terminology from the source. Do not paraphrase names of models, datasets, or metrics.
+3. NUMBERS: Write numbers exactly as they appear in the source, unless a specific calculation is requested.
+4. CALCULATIONS: If the question asks for a total, difference, or change, you MUST perform the math and state the result in the sentence. Show no intermediate steps in the final output, but ensure the math is correct.
+5. UNITS: Always include units (e.g., %, million, lbs, tokens, DKK) as specified in the table or question.
+6. VISUALS: For questions about "photos", "pictures", or "images", describe the visual evidence. If the information is not visually present (even if it's in the text), return "NOT FOUND".
+7. AMBIGUITY: If multiple tables exist, use the one that most closely matches the keywords in the question. Verify column names like "Test", "Train", or "Dev".. If the table contains multiple rows with similar names (like 'Multi Task' and '+Coreference'), prefer the row that exactly matches the keyword in the question.
 
+EXAMPLES:
 
 Example 1 (number):
 Image: [Table: Countries and their capitals populations: Tokyo=14M, Delhi=32M, Shanghai=24M]
 Question: What is the population of Shanghai?
+Internal Thought: (Locate row: Shanghai -> Identify value: 24M)
 Answer: The population of Shanghai is 24 million.
 
 Example 2 (term):
 Image: [Text: "The Adam optimizer is widely used for training neural networks due to its adaptive learning rate"]
 Question: What optimizer is mentioned?
+Internal Thought: (Scan text for optimizer name -> Match found: Adam)
 Answer: The Adam optimizer is mentioned.
 
 Example 3 (description):
 Image: [Text: "The main contribution of this paper is a novel attention mechanism that reduces computational complexity from quadratic to linear"]
 Question: What is the main contribution of this paper?
+Internal Thought: (Scan text for 'main contribution' -> Extract exact phrasing)
 Answer: The main contribution is a novel attention mechanism that reduces computational complexity from quadratic to linear.
 
 Example 4 (sum):
 Image: [Table: Company sales: Q1=12500, Q2=13800, Q3=14200, Q4=15600]
 Question: What is the total sales for Q3 and Q4?
+Internal Thought: (Locate Q3: 14200 -> Locate Q4: 15600 -> Calculate: 14200 + 15600 = 29800)
 Answer: The total sales for Q3 and Q4 is 29800.
 
 Example 5 (model name + score):
 Image: [Table: Car performance: Tesla=85%, BMW=92%, Audi=78%, Mercedes=89%]
 Question: Which car brand achieved the highest performance score?
+Internal Thought: (Scan values: 85, 92, 78, 89 -> Find max: 92 -> Match to brand: BMW)
 Answer: BMW achieved the highest performance score with 92%.
 
-Now answer the question following the same format."""
+Now answer the question following the exact same format. Output your internal reasoning starting with "Internal Thought:"""
 
         # Уменьшаем изображения
         resized_images = []
@@ -160,6 +180,30 @@ Now answer the question following the same format."""
             parts = answer.lower().split(query.lower())
             if len(parts) > 1:
                 answer = parts[-1].strip()
+
+        return answer
+
+    def postprocess_answer(answer, query):
+        if not answer or answer in ["NOT FOUND", "TIMEOUT", "ERROR"]:
+            return answer
+
+        # 1. Проценты
+        if "%" not in answer and any(
+            w in query.lower() for w in ["%", "percent", "percentage", "accuracy"]
+        ):
+            numbers = re.findall(r"\d+(?:\.\d+)?", answer)
+            for n in numbers:
+                if float(n) < 1:
+                    answer = f"{float(n) * 100:.0f}%"
+                    break
+
+        # 2. Удаление запятых из чисел
+        answer = re.sub(r"(\d),(\d)", r"\1\2", answer)
+
+        # 3. Удаление преамбулы
+        for prefix in ["assistant", "user", "I think", "The answer is", "Answer:"]:
+            if answer.lower().startswith(prefix.lower()):
+                answer = answer[len(prefix) :].strip()
 
         return answer
 

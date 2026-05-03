@@ -6,12 +6,12 @@ import numpy as np
 from collections import defaultdict
 import re
 import torch
+from scripts.full_pipeline_v2 import full_pipeline_v2, normalize_answer
+from src.core.generators.qwen_vl_generator import create_table_generator
 
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from scripts.full_pipeline_v2 import full_pipeline_v2
-from src.core.generators.qwen_vl_generator import create_table_generator
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 print(f"Using device: {device}")
@@ -136,17 +136,19 @@ def evaluate_rag_v2(questions):
         start_time = time.time()
 
         try:
-            answer, total_time = full_pipeline_v2(q["question"])
+            answer, answer_normalized, total_time = full_pipeline_v2(q["question"])
         except Exception as e:
             print(f"  Pipeline error: {e}")
             answer = "ERROR"
+            answer_normalized = "error"
             total_time = time.time() - start_time
 
         elapsed_time = time.time() - start_time
         latencies.append(elapsed_time)
 
-        exact_match, f1_score = compute_similarity(answer, q["expected_answer"])
+        expected_norm = normalize_answer(q["expected_answer"])
 
+        exact_match, f1_score = compute_similarity(answer_normalized, expected_norm)
         results.append(
             {
                 "question": q["question"],
