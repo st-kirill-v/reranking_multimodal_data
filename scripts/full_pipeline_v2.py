@@ -1,20 +1,5 @@
 """
-RAG Evaluation Pipeline v3 — исправленная версия после разбора вопросов.
-
-Ключевые изменения относительно v2:
-  1. parse_answer()       — обрезает "internal thought:" из ответа VLM
-  2. normalize_answer()   — нормализует ТОЛЬКО числовые ответы, применяется
-                            к обоим (generated + expected) при вычислении метрик
-  3. sanitize_generated() — обрезает хвост few-shot промпта из ответа VLM
-                            (проблема была НЕ в чанках, а в генераторе)
-  4. domain_classifier()  — 5 доменов DocBench: academic/financial/government/
-                            legal/news. Влияет на лимиты контекста
-  5. CONTEXT_LIMITS       — явная таблица лимитов для всех 5 доменов × 4 типов
-  6. get_dynamic_limits() — принимает q_type + domain
-  7. expand_with_neighbors() — фиксированный: возвращает топ-N + их соседей,
-                            итоговый размер контекста явно контролируется
-  8. sanitize_chunk()     — убран из pipeline (не та проблема), оставлен как
-                            утилита на случай грязных данных
+RAG Evaluation Pipeline v2 — исправленная версия после разбора вопросов.
 """
 
 import torch

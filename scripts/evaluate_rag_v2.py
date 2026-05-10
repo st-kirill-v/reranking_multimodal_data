@@ -6,7 +6,10 @@ import numpy as np
 from collections import defaultdict
 import re
 import torch
-from scripts.full_pipeline_v2 import full_pipeline_v2, normalize_answer
+from scripts.full_pipeline_only_pages_only_embedder import (
+    full_pipeline_only_pages_only_embedder,
+    normalize_answer,
+)
 from src.core.generators.qwen_vl_generator import create_table_generator
 
 project_root = Path(__file__).parent.parent
@@ -136,7 +139,9 @@ def evaluate_rag_v2(questions):
         start_time = time.time()
 
         try:
-            answer, answer_normalized, total_time = full_pipeline_v2(q["question"])
+            answer, answer_normalized, total_time = full_pipeline_only_pages_only_embedder(
+                q["question"]
+            )
         except Exception as e:
             print(f"  Pipeline error: {e}")
             answer = "ERROR"
