@@ -5,22 +5,14 @@ import time
 import numpy as np
 from collections import defaultdict
 import re
-import torch
-from scripts.full_pipeline_only_pages_only_embedder import (
-    full_pipeline_only_pages_only_embedder,
-    normalize_answer,
-)
-from src.core.generators.qwen_vl_generator import create_table_generator
 
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-
-device = "cuda" if torch.cuda.is_available() else "cpu"
-print(f"Using device: {device}")
-
-print("Loading Qwen3-VL...")
-qwen = create_table_generator(device=device)
+from scripts.full_pipeline_only_pages_only_embedder import (
+    full_pipeline_only_pages_only_embedder,
+    normalize_answer,
+)
 
 data_path = project_root / "data" / "datasets" / "docbench"
 

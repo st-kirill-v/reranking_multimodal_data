@@ -3,11 +3,19 @@ from transformers import Qwen3VLForConditionalGeneration, AutoProcessor, BitsAnd
 from PIL import Image
 from typing import List, Dict, Any
 import time
+import re
+import importlib.util
 
 
 class QwenVLTableGenerator:
-    def __init__(self, device: str = None, timeout_seconds: int = 180):
+    def __init__(
+        self,
+        device: str = None,
+        timeout_seconds: int = 180,
+        max_image_long_edge: int | None = 1600,
+    ):
         self.timeout_seconds = timeout_seconds
+        self.max_image_long_edge = max_image_long_edge
 
         if device is None:
             self.device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -17,13 +25,17 @@ class QwenVLTableGenerator:
         print(f"Loading Qwen3-VL-8B-Instruct on {self.device}")
         print(f"VLM timeout set to {self.timeout_seconds} seconds")
 
-        quantization_config = BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_compute_dtype=torch.float16,
-            bnb_4bit_use_double_quant=True,
-            bnb_4bit_quant_type="nf4",
-            llm_int8_enable_fp32_cpu_offload=True,
-        )
+        quantization_config = None
+        if importlib.util.find_spec("bitsandbytes"):
+            quantization_config = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_compute_dtype=torch.float16,
+                bnb_4bit_use_double_quant=True,
+                bnb_4bit_quant_type="nf4",
+                llm_int8_enable_fp32_cpu_offload=True,
+            )
+        else:
+            print("bitsandbytes is not installed; loading Qwen3-VL without 4-bit quantization")
 
         self.model = Qwen3VLForConditionalGeneration.from_pretrained(
             "Qwen/Qwen3-VL-8B-Instruct",
@@ -40,9 +52,9 @@ class QwenVLTableGenerator:
 
         print("Qwen3-VL-8B-Instruct loaded successfully")
 
-    def _resize_image(self, img: Image.Image, max_size: int = 800) -> Image.Image:
-        if max(img.size) > max_size:
-            ratio = max_size / max(img.size)
+    def _resize_image(self, img: Image.Image) -> Image.Image:
+        if self.max_image_long_edge and max(img.size) > self.max_image_long_edge:
+            ratio = self.max_image_long_edge / max(img.size)
             new_size = (int(img.size[0] * ratio), int(img.size[1] * ratio))
             return img.resize(new_size, Image.Resampling.LANCZOS)
         return img
@@ -112,7 +124,7 @@ Now answer the question following the exact same format. Output your internal re
         resized_images = []
         if context_images:
             for img in context_images[:5]:
-                resized_images.append(self._resize_image(img, max_size=800))
+                resized_images.append(self._resize_image(img))
 
         # Собираем текстовый контент
         user_text = ""
@@ -156,7 +168,8 @@ Now answer the question following the exact same format. Output your internal re
             )
         print(f"    [VLM] Generation time: {time.time() - start_time:.2f}s")
 
-        answer = self.processor.decode(outputs[0], skip_special_tokens=True)
+        generated_ids = outputs[:, inputs.input_ids.shape[1] :]
+        answer = self.processor.decode(generated_ids[0], skip_special_tokens=True)
 
         # Извлекаем ответ из <ANSWER> блока
         if "<ANSWER>" in answer:
@@ -217,5 +230,5 @@ Now answer the question following the exact same format. Output your internal re
         }
 
 
-def create_table_generator(device: str = None):
-    return QwenVLTableGenerator(device=device)
+def create_table_generator(device: str = None, max_image_long_edge: int | None = 1600):
+    return QwenVLTableGenerator(device=device, max_image_long_edge=max_image_long_edge)

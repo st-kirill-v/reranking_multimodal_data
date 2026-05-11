@@ -32,12 +32,8 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest", "black", "ruff", "mypy"]
 
-[project.scripts]
-rag-server = "src.api.server:main"
-rag-loader = "src.pipeline.dataset_loader:main"
-
-[tool.setuptools]
-packages = ["src"]
+[tool.setuptools.packages.find]
+include = ["src*"]
 
 [tool.black]
 line-length = 100
