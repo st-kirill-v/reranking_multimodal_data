@@ -47,6 +47,8 @@ def load_docbench_questions(data_dir: Path, question_types: set[str] | None = No
     questions: list[dict] = []
     for jsonl_file in sorted(data_dir.glob("*/*_qa.jsonl")):
         folder = jsonl_file.parent.name
+        if not folder.isdigit():
+            continue
         with jsonl_file.open("r", encoding="utf-8") as fh:
             for line in fh:
                 if not line.strip():

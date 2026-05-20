@@ -14,7 +14,7 @@ class NemotronVLReranker:
         dtype = torch.bfloat16 if config.dtype == "bfloat16" else torch.float16
         self.model = AutoModelForSequenceClassification.from_pretrained(
             config.model_id,
-            torch_dtype=dtype,
+            dtype=dtype,
             trust_remote_code=True,
             device_map=config.device,
         ).eval()

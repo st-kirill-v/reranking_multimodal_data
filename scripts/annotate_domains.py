@@ -38,7 +38,7 @@ def load_model():
     print(f"Loading model: {MODEL_NAME}")
     model = Qwen3VLForConditionalGeneration.from_pretrained(
         MODEL_NAME,
-        torch_dtype=torch.bfloat16,
+        dtype=torch.bfloat16,
         device_map="auto",
         trust_remote_code=True,
     ).eval()

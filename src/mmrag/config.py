@@ -40,6 +40,7 @@ class EmbedderConfig:
     batch_size: int = 1
     normalize: bool = True
     query_prompt: str = "Represent the user's input."
+    encoding_api: str = "docapi"
 
 
 @dataclass(frozen=True)

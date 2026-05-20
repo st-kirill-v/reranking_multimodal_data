@@ -38,7 +38,7 @@ class MultimodalPageRetriever:
         mismatches = {
             key: (manifest_embedding.get(key), expected.get(key))
             for key in comparable_keys
-            if manifest_embedding.get(key) != expected.get(key)
+            if key in manifest_embedding and manifest_embedding.get(key) != expected.get(key)
         }
         if mismatches:
             raise ValueError(
@@ -97,3 +97,36 @@ def expand_with_neighbors(
         reverse=True,
     )
     return expanded[:final_limit] if final_limit else expanded
+
+
+def aggregate_candidates_by_page(candidates: list[RetrievalCandidate]) -> list[RetrievalCandidate]:
+    grouped: dict[str, RetrievalCandidate] = {}
+    tile_counts: dict[str, int] = {}
+
+    for candidate in candidates:
+        key = candidate.doc_id
+        tile_counts[key] = tile_counts.get(key, 0) + 1
+        current = grouped.get(key)
+        if current is None or candidate.score > current.score:
+            grouped[key] = RetrievalCandidate(
+                folder=candidate.folder,
+                page=candidate.page,
+                path=candidate.path,
+                score=candidate.score,
+                rank=candidate.rank,
+                index=candidate.index,
+                source="page_aggregated_from_tiles" if candidate.tile_id else candidate.source,
+                rerank_score=candidate.rerank_score,
+                tile_id=candidate.tile_id,
+                crop_box=candidate.crop_box,
+            )
+
+    aggregated = list(grouped.values())
+    for candidate in aggregated:
+        count = tile_counts.get(candidate.doc_id, 1)
+        if count > 1:
+            candidate.score = candidate.score + 0.001 * min(count - 1, 5)
+    aggregated.sort(key=lambda item: item.score, reverse=True)
+    for rank, candidate in enumerate(aggregated, start=1):
+        candidate.rank = rank
+    return aggregated

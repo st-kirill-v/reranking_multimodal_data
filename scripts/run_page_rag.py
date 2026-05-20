@@ -26,6 +26,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--index-dir", type=Path, default=None)
     parser.add_argument("--index-name", default="pages_qwen3")
     parser.add_argument("--embed-device", default="cuda")
+    parser.add_argument("--encoding-api", choices=["legacy_encode", "docapi"], default="docapi")
     parser.add_argument("--rerank-device", default="cuda")
     parser.add_argument("--generator-device", default="cuda")
     parser.add_argument("--first-stage-top-k", type=int, default=30)
@@ -43,7 +44,7 @@ def main() -> None:
 
     config = PipelineConfig(
         paths=ProjectPaths(data_dir=args.data_dir, index_dir=args.index_dir),
-        embedder=EmbedderConfig(device=args.embed_device),
+        embedder=EmbedderConfig(device=args.embed_device, encoding_api=args.encoding_api),
         index=IndexConfig(name=args.index_name),
         retrieval=RetrievalConfig(
             first_stage_top_k=args.first_stage_top_k,

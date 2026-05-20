@@ -19,7 +19,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--index-name", default="pages_qwen3")
     parser.add_argument("--model-id", default="Qwen/Qwen3-VL-Embedding-2B")
     parser.add_argument("--device", default="cuda")
+    parser.add_argument("--encoding-api", choices=["legacy_encode", "docapi"], default="docapi")
     parser.add_argument("--top-k", type=int, default=30)
+    parser.add_argument("--search-top-k", type=int, default=0)
+    parser.add_argument("--aggregate-page", action="store_true")
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--types", nargs="*", default=["multimodal-t", "multimodal-f"])
     parser.add_argument("--output", type=Path, default=Path("data/retrieval_eval_qwen3.json"))
@@ -28,11 +31,15 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    from src.mmrag.retrieval import MultimodalPageRetriever
+    from src.mmrag.retrieval import MultimodalPageRetriever, aggregate_candidates_by_page
 
     config = PipelineConfig(
         paths=ProjectPaths(data_dir=args.data_dir, index_dir=args.index_dir),
-        embedder=EmbedderConfig(model_id=args.model_id, device=args.device),
+        embedder=EmbedderConfig(
+            model_id=args.model_id,
+            device=args.device,
+            encoding_api=args.encoding_api,
+        ),
         index=IndexConfig(name=args.index_name),
     )
     questions = load_docbench_questions(config.paths.data_dir, question_types=set(args.types))
@@ -42,9 +49,13 @@ def main() -> None:
     retriever = MultimodalPageRetriever(config)
     rows = []
     folder_hits = {1: 0, 5: 0, 10: 0, args.top_k: 0}
+    search_top_k = args.search_top_k or args.top_k
 
     for i, question in enumerate(questions, start=1):
-        candidates = retriever.search(question["question"], top_k=args.top_k)
+        candidates = retriever.search(question["question"], top_k=search_top_k)
+        if args.aggregate_page:
+            candidates = aggregate_candidates_by_page(candidates)
+        candidates = candidates[: args.top_k]
         folders = [candidate.folder for candidate in candidates]
         expected_folder = str(question["folder"])
         for k in folder_hits:
@@ -76,6 +87,8 @@ def main() -> None:
     summary = {
         "total": len(rows),
         "top_k": args.top_k,
+        "search_top_k": search_top_k,
+        "aggregate_page": args.aggregate_page,
         "folder_recall": {f"R@{k}": folder_hits[k] / total for k in sorted(folder_hits)},
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)

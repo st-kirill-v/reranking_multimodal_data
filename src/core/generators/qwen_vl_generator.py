@@ -5,6 +5,7 @@ from typing import List, Dict, Any
 import time
 import re
 import importlib.util
+import os
 
 
 class QwenVLTableGenerator:
@@ -13,9 +14,22 @@ class QwenVLTableGenerator:
         device: str = None,
         timeout_seconds: int = 180,
         max_image_long_edge: int | None = 1600,
+        load_4bit: bool | None = None,
+        max_new_tokens: int | None = None,
+        prompt_style: str | None = None,
+        do_sample: bool | None = None,
+        max_images: int | None = None,
+        answer_refine: str | None = None,
     ):
         self.timeout_seconds = timeout_seconds
         self.max_image_long_edge = max_image_long_edge
+        self.max_new_tokens = max_new_tokens or int(os.getenv("MMRAG_QWEN_MAX_NEW_TOKENS", "128"))
+        self.prompt_style = prompt_style or os.getenv("MMRAG_QWEN_PROMPT_STYLE", "concise")
+        self.answer_refine = answer_refine or os.getenv("MMRAG_QWEN_ANSWER_REFINE", "none")
+        self.max_images = max_images or int(os.getenv("MMRAG_QWEN_MAX_IMAGES", "5"))
+        if do_sample is None:
+            do_sample = os.getenv("MMRAG_QWEN_DO_SAMPLE", "0").lower() in {"1", "true", "yes"}
+        self.do_sample = do_sample
 
         if device is None:
             self.device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -24,9 +38,19 @@ class QwenVLTableGenerator:
 
         print(f"Loading Qwen3-VL-8B-Instruct on {self.device}")
         print(f"VLM timeout set to {self.timeout_seconds} seconds")
+        self.last_raw_output = ""
+        self.last_reasoning = ""
+        self.last_answer = ""
+
+        if load_4bit is None:
+            load_4bit = os.getenv("MMRAG_QWEN_LOAD_4BIT", "1").lower() not in {
+                "0",
+                "false",
+                "no",
+            }
 
         quantization_config = None
-        if importlib.util.find_spec("bitsandbytes"):
+        if load_4bit and importlib.util.find_spec("bitsandbytes"):
             quantization_config = BitsAndBytesConfig(
                 load_in_4bit=True,
                 bnb_4bit_compute_dtype=torch.float16,
@@ -34,16 +58,30 @@ class QwenVLTableGenerator:
                 bnb_4bit_quant_type="nf4",
                 llm_int8_enable_fp32_cpu_offload=True,
             )
+        elif not load_4bit:
+            print("Qwen3-VL 4-bit quantization disabled by configuration")
         else:
             print("bitsandbytes is not installed; loading Qwen3-VL without 4-bit quantization")
 
+        max_memory = None
+        max_gpu_memory = os.getenv("MMRAG_QWEN_MAX_GPU_MEMORY")
+        max_cpu_memory = os.getenv("MMRAG_QWEN_MAX_CPU_MEMORY", "96GiB")
+        if max_gpu_memory:
+            max_memory = {0: max_gpu_memory, "cpu": max_cpu_memory}
+            print(f"Qwen3-VL max_memory={max_memory}")
+
+        offload_folder = os.getenv("MMRAG_QWEN_OFFLOAD_FOLDER")
+
         self.model = Qwen3VLForConditionalGeneration.from_pretrained(
             "Qwen/Qwen3-VL-8B-Instruct",
-            torch_dtype=torch.float16,
+            dtype=torch.float16,
             trust_remote_code=True,
             device_map="auto",
             quantization_config=quantization_config,
             low_cpu_mem_usage=True,
+            max_memory=max_memory,
+            offload_folder=offload_folder,
+            offload_state_dict=bool(offload_folder),
         ).eval()
 
         self.processor = AutoProcessor.from_pretrained(
@@ -68,7 +106,8 @@ class QwenVLTableGenerator:
         if not context_images and not context_text:
             return "NOT FOUND"
 
-        system_prompt = """You are a precise RAG assistant. Your task is to extract or calculate information from images (tables, charts, text, or photos).
+        if self.prompt_style in {"legacy", "concise", "think_answer"}:
+            system_prompt = """You are a precise RAG assistant. Your task is to extract or calculate information from images (tables, charts, text, or photos).
 
 ANALYSIS STEP:
 Before providing the final answer, perform these steps internally:
@@ -119,11 +158,33 @@ Internal Thought: (Scan values: 85, 92, 78, 89 -> Find max: 92 -> Match to brand
 Answer: BMW achieved the highest performance score with 92%.
 
 Now answer the question following the exact same format. Output your internal reasoning starting with "Internal Thought:"""
+            if self.prompt_style == "think_answer":
+                system_prompt = system_prompt.replace(
+                    'Now answer the question following the exact same format. Output your internal reasoning starting with "Internal Thought:"',
+                    'Now answer the question following the exact same format. Output your internal reasoning starting with "Internal Thought:", then output a final line starting with "Answer:".',
+                )
+            elif self.prompt_style != "legacy":
+                system_prompt = system_prompt.replace(
+                    'Now answer the question following the exact same format. Output your internal reasoning starting with "Internal Thought:"',
+                    "Now answer the question following the same rules and examples. Think through the row, column, visual evidence, and any arithmetic internally. Do not output analysis, reasoning, table-location steps, or Internal Thought. Output exactly one line in this format: Answer: <final answer sentence>.",
+                )
+                system_prompt = re.sub(
+                    r"Internal Thought:.*\n",
+                    "",
+                    system_prompt,
+                )
+        else:
+            system_prompt = """You are a precise document question-answering assistant.
+Use only the provided page images.
+Return only the final answer. Do not explain your reasoning. Do not write "Internal Thought".
+If the answer is a number, include the exact number and unit when visible.
+If the question asks for a comparison, difference, total, ratio, or percentage change, calculate it and return the result concisely.
+If the answer is not visible in the provided images, return exactly: NOT FOUND."""
 
         # Уменьшаем изображения
         resized_images = []
         if context_images:
-            for img in context_images[:5]:
+            for img in context_images[: self.max_images]:
                 resized_images.append(self._resize_image(img))
 
         # Собираем текстовый контент
@@ -156,20 +217,27 @@ Now answer the question following the exact same format. Output your internal re
 
         start_time = time.time()
         with torch.no_grad():
-            outputs = self.model.generate(
-                **inputs,
-                max_new_tokens=256,
-                temperature=0.2,
-                do_sample=True,
-                top_p=0.9,
-                use_cache=True,
-                pad_token_id=self.processor.tokenizer.pad_token_id,
-                eos_token_id=self.processor.tokenizer.eos_token_id,
-            )
+            generation_kwargs = {
+                "max_new_tokens": self.max_new_tokens,
+                "do_sample": self.do_sample,
+                "use_cache": True,
+                "pad_token_id": self.processor.tokenizer.pad_token_id,
+                "eos_token_id": self.processor.tokenizer.eos_token_id,
+            }
+            if self.do_sample:
+                generation_kwargs.update({"temperature": 0.2, "top_p": 0.9})
+            outputs = self.model.generate(**inputs, **generation_kwargs)
         print(f"    [VLM] Generation time: {time.time() - start_time:.2f}s")
 
         generated_ids = outputs[:, inputs.input_ids.shape[1] :]
-        answer = self.processor.decode(generated_ids[0], skip_special_tokens=True)
+        raw_answer = self.processor.decode(generated_ids[0], skip_special_tokens=True)
+        self.last_raw_output = raw_answer
+        self.last_reasoning = self._extract_reasoning(raw_answer)
+
+        answer = self._extract_final_answer(raw_answer)
+        if self.answer_refine != "none":
+            answer = self._refine_answer(query, raw_answer)
+        self.last_answer = answer
 
         # Извлекаем ответ из <ANSWER> блока
         if "<ANSWER>" in answer:
@@ -178,10 +246,15 @@ Now answer the question following the exact same format. Output your internal re
             answer = answer.split("Answer:")[-1].strip()
         elif "ANSWER:" in answer:
             answer = answer.split("ANSWER:")[-1].strip()
+        elif "Internal Thought:" in answer:
+            answer = answer.split("Internal Thought:")[-1].strip()
+            if "Final answer:" in answer:
+                answer = answer.split("Final answer:")[-1].strip()
+            elif "Answer:" in answer:
+                answer = answer.split("Answer:")[-1].strip()
 
         # Очищаем от лишнего
-        answer = answer.replace("assistant", "").strip()
-        answer = answer.replace("user", "").strip()
+        answer = re.sub(r"^(assistant|user)\s*:?\s*", "", answer, flags=re.IGNORECASE).strip()
         answer = answer.strip('"').strip("'")
 
         # Если ответ пустой или слишком короткий
@@ -196,6 +269,112 @@ Now answer the question following the exact same format. Output your internal re
                 answer = parts[-1].strip()
 
         return answer
+
+    def _refine_answer(self, query: str, raw_answer: str) -> str:
+        refine_prompt = """You convert a draft document QA output into the final answer.
+Use only the draft output. Do not add new facts.
+Return exactly one concise final answer sentence.
+Do not include reasoning, table-location steps, THINK, or analysis.
+If the draft contains an explicit final answer, preserve it.
+If the draft contains the answer inside reasoning, extract the answer.
+Preserve all answer-critical numbers, units, percentages, model names, dataset names, and comparison direction from the draft.
+Return NOT FOUND only if the draft explicitly says the answer is not visible or no answer candidate is present."""
+        user_text = f"Question: {query}\n\nDraft output:\n{raw_answer}\n\nFinal answer:"
+        messages = [
+            {"role": "system", "content": refine_prompt},
+            {"role": "user", "content": user_text},
+        ]
+        text = self.processor.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
+        inputs = self.processor(text=text, return_tensors="pt").to(self.device)
+        with torch.no_grad():
+            outputs = self.model.generate(
+                **inputs,
+                max_new_tokens=min(96, self.max_new_tokens),
+                do_sample=False,
+                use_cache=True,
+                pad_token_id=self.processor.tokenizer.pad_token_id,
+                eos_token_id=self.processor.tokenizer.eos_token_id,
+            )
+        generated_ids = outputs[:, inputs.input_ids.shape[1] :]
+        refined = self.processor.decode(generated_ids[0], skip_special_tokens=True)
+        return self._extract_final_answer(refined)
+
+    @staticmethod
+    def _looks_like_reasoning(text: str) -> bool:
+        text = (text or "").strip().lower()
+        return text.startswith(
+            (
+                "locate ",
+                "scan ",
+                "identify ",
+                "find ",
+                "calculate ",
+                "reviewing ",
+                "i need ",
+                "the question asks",
+                "the document discusses",
+                "the table ",
+                "table ",
+                "figure ",
+                "image ",
+            )
+        )
+
+    @classmethod
+    def _extract_final_answer(cls, answer: str) -> str:
+        answer = (answer or "").strip()
+        markers = [
+            "</answer>",
+            "Final answer:",
+            "Final Answer:",
+            "The answer is:",
+            "the answer is:",
+            "Answer:",
+            "ANSWER:",
+        ]
+        for marker in markers:
+            if marker in answer:
+                if marker == "</answer>":
+                    before = answer.split(marker)[0]
+                    if "<answer>" in before:
+                        answer = before.split("<answer>")[-1].strip()
+                else:
+                    answer = answer.split(marker)[-1].strip()
+                break
+
+        paragraphs = [part.strip() for part in re.split(r"\n\s*\n", answer) if part.strip()]
+        if len(paragraphs) > 1:
+            last = paragraphs[-1]
+            if len(last.split()) <= 45 or not cls._looks_like_reasoning(last):
+                answer = last
+
+        lines = [line.strip() for line in answer.splitlines() if line.strip()]
+        if len(lines) > 1:
+            last = lines[-1]
+            if len(last.split()) <= 35 and not cls._looks_like_reasoning(last):
+                answer = last
+
+        return answer
+
+    @staticmethod
+    def _extract_reasoning(answer: str) -> str:
+        answer = (answer or "").strip()
+        if not answer:
+            return ""
+        if "ANSWER:" in answer:
+            before = answer.split("ANSWER:")[0]
+        elif "Answer:" in answer:
+            before = answer.split("Answer:")[0]
+        elif "Final answer:" in answer:
+            before = answer.split("Final answer:")[0]
+        else:
+            return ""
+        before = before.strip()
+        if before.lower().startswith("think:"):
+            before = before.split(":", 1)[-1].strip()
+        return before
 
     def postprocess_answer(answer, query):
         if not answer or answer in ["NOT FOUND", "TIMEOUT", "ERROR"]:
@@ -230,5 +409,23 @@ Now answer the question following the exact same format. Output your internal re
         }
 
 
-def create_table_generator(device: str = None, max_image_long_edge: int | None = 1600):
-    return QwenVLTableGenerator(device=device, max_image_long_edge=max_image_long_edge)
+def create_table_generator(
+    device: str = None,
+    max_image_long_edge: int | None = 1600,
+    load_4bit: bool | None = None,
+    max_new_tokens: int | None = None,
+    prompt_style: str | None = None,
+    do_sample: bool | None = None,
+    max_images: int | None = None,
+    answer_refine: str | None = None,
+):
+    return QwenVLTableGenerator(
+        device=device,
+        max_image_long_edge=max_image_long_edge,
+        load_4bit=load_4bit,
+        max_new_tokens=max_new_tokens,
+        prompt_style=prompt_style,
+        do_sample=do_sample,
+        max_images=max_images,
+        answer_refine=answer_refine,
+    )

@@ -45,7 +45,7 @@ class MultimodalSearch:
         print("Loading Nemotron Rerank model from HuggingFace cache...")
         self.rerank_model = AutoModelForSequenceClassification.from_pretrained(
             "nvidia/llama-nemotron-rerank-vl-1b-v2",
-            torch_dtype=self.dtype,
+            dtype=self.dtype,
             trust_remote_code=True,
             device_map=self.device,
         ).eval()

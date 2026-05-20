@@ -11,6 +11,10 @@ class PageRecord:
     page: int
     path: Path
     index: int | None = None
+    tile_id: str | None = None
+    crop_box: tuple[int, int, int, int] | None = None
+    source_page_width: int | None = None
+    source_page_height: int | None = None
 
     @property
     def doc_id(self) -> str:
@@ -28,6 +32,10 @@ class PageRecord:
             page=int(data["page"]),
             path=Path(data["path"]),
             index=data.get("index"),
+            tile_id=data.get("tile_id"),
+            crop_box=tuple(data["crop_box"]) if data.get("crop_box") else None,
+            source_page_width=data.get("source_page_width"),
+            source_page_height=data.get("source_page_height"),
         )
 
 
@@ -41,6 +49,8 @@ class RetrievalCandidate:
     index: int
     source: str = "qwen3_page_embedding"
     rerank_score: float | None = None
+    tile_id: str | None = None
+    crop_box: tuple[int, int, int, int] | None = None
 
     @property
     def doc_id(self) -> str:
@@ -56,6 +66,8 @@ class RetrievalCandidate:
             "index": self.index,
             "source": self.source,
             "rerank_score": self.rerank_score,
+            "tile_id": self.tile_id,
+            "crop_box": list(self.crop_box) if self.crop_box else None,
         }
 
     @classmethod
@@ -69,4 +81,6 @@ class RetrievalCandidate:
             score=score,
             rank=rank,
             index=index,
+            tile_id=record.tile_id,
+            crop_box=record.crop_box,
         )
