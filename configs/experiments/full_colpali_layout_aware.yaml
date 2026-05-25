@@ -1,0 +1,26 @@
+experiment_name: full_colpali_layout_aware
+results_root: results
+dataset:
+  name: docbench
+  data_dir: data/datasets/docbench
+evaluation:
+  evaluator: full_pipeline
+  adaptive_policy: text_top3_visual_top5
+  text_top_pages: 3
+  visual_top_pages: 5
+retrieval:
+  model_id: vidore/colpali-v1.3-merged
+  index_dir: index_colpali_v1_3_merged
+  index_name: pages_colpali_v1_3_merged_clean
+  first_stage_top_k: 30
+reranking:
+  model_id: nvidia/llama-nemotron-rerank-vl-1b-v2
+  top_k: 10
+generation:
+  model_id: Qwen/Qwen3-VL-8B-Instruct
+  prompt_style: concise
+  no_4bit: false
+cropping:
+  visual_crop_policy: layout_aware_v2
+  layout_context_mode: full_page_plus_crop
+  debug_crop_dir: data/debug_crops/full_pipeline_layout_aware_v2

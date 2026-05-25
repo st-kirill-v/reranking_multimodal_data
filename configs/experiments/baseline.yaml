@@ -1,0 +1,16 @@
+experiment_name: baseline
+results_root: results
+dataset:
+  name: docbench
+  input_candidates: data/eval_vlm_reranked_adaptive_clean_rerun_full_308.json
+evaluation:
+  evaluator: baseline
+  mode: reranked
+  adaptive_policy: text_top3_visual_top5
+  text_top_pages: 3
+  visual_top_pages: 5
+generation:
+  prompt_style: concise
+  no_4bit: false
+cropping:
+  visual_crop_policy: visual_main

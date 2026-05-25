@@ -145,7 +145,7 @@ def build_page_index(config: PipelineConfig) -> dict:
             "vectors": index.ntotal,
             "dim": index.d,
         },
-        "embedding": embedder.manifest(dim),
+        "embedding": embedder.manifest(index.d),
     }
     with page_index.manifest_path.open("w", encoding="utf-8") as fh:
         json.dump(manifest, fh, indent=2, ensure_ascii=False)

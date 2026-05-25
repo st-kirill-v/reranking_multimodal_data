@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import sys
 import time
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -10,6 +11,10 @@ from typing import Any
 
 import numpy as np
 from PIL import Image
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 
 def parse_args() -> argparse.Namespace:
@@ -50,7 +55,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--print-think", action="store_true")
     parser.add_argument(
         "--prompt-style",
-        choices=["concise", "legacy", "think_answer"],
+        choices=["concise", "legacy", "think_answer", "smart_universal"],
         default="concise",
     )
     parser.add_argument("--answer-refine", choices=["none", "text"], default="none")
@@ -226,7 +231,7 @@ def select_candidates(
     row: dict[str, Any], mode: str, top_pages: int, context_policy: str
 ) -> list[dict[str, Any]]:
     if mode == "reranked":
-        candidates = row.get("top10_reranked") or row.get("reranked") or []
+        candidates = row.get("top10_reranked") or row.get("reranked") or row.get("pages") or []
     else:
         candidates = row.get("candidates") or row.get("top10_prerank") or []
     if context_policy == "raw":
@@ -441,9 +446,23 @@ def load_images(
 
 
 def summarize(results: list[dict[str, Any]], latencies: list[float]) -> dict[str, Any]:
-    exact = [row["exact"] for row in results]
-    f1 = [row["f1"] for row in results]
-    by_type: dict[str, list[float]] = defaultdict(list)
+    total = len(results)
+    summary: dict[str, Any] = {
+        "total": total,
+        "exact_match": float(np.mean([row["exact"] for row in results])) if results else 0.0,
+        "mean_f1": float(np.mean([row["f1"] for row in results])) if results else 0.0,
+        "accuracy_f1_gt_0_5": (
+            float(np.mean([row["f1"] > 0.5 for row in results])) if results else 0.0
+        ),
+        "latency_seconds": {
+            "mean": float(np.mean(latencies)) if latencies else 0.0,
+            "p50": float(np.percentile(latencies, 50)) if latencies else 0.0,
+            "p95": float(np.percentile(latencies, 95)) if latencies else 0.0,
+        },
+        "extended_metrics": {},
+        "by_type": {},
+    }
+
     metric_keys = [
         "relaxed_exact",
         "answer_contains_expected",
@@ -453,48 +472,39 @@ def summarize(results: list[dict[str, Any]], latencies: list[float]) -> dict[str
         "numeric_precision",
         "numeric_recall",
     ]
-    for row in results:
-        by_type[row["type"]].append(row["f1"])
+    for key in metric_keys:
+        values = [row[key] for row in results if key in row and row[key] is not None]
+        summary["extended_metrics"][key] = float(np.mean(values)) if values else 0.0
 
-    return {
-        "total": len(results),
-        "exact_match": float(np.mean(exact)) if exact else None,
-        "mean_f1": float(np.mean(f1)) if f1 else None,
-        "accuracy_f1_gt_0_5": float(np.mean([score > 0.5 for score in f1])) if f1 else None,
-        "latency_seconds": {
-            "mean": float(np.mean(latencies)) if latencies else None,
-            "p50": float(np.percentile(latencies, 50)) if latencies else None,
-            "p95": float(np.percentile(latencies, 95)) if latencies else None,
-        },
-        "extended_metrics": {
-            key: float(np.mean([row.get(key, 0.0) for row in results])) for key in metric_keys
-        },
-        "by_type": {
-            key: {
-                "count": len(scores),
-                "mean_f1": float(np.mean(scores)) if scores else None,
-                "accuracy_f1_gt_0_5": (
-                    float(np.mean([score > 0.5 for score in scores])) if scores else None
-                ),
-                "extended_metrics": {
-                    metric_key: float(
-                        np.mean([row.get(metric_key, 0.0) for row in results if row["type"] == key])
-                    )
-                    for metric_key in metric_keys
-                },
-            }
-            for key, scores in sorted(by_type.items())
-        },
-    }
+    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in results:
+        grouped[row.get("type", "unknown")].append(row)
+    for group_name, rows in grouped.items():
+        group_summary = {
+            "count": len(rows),
+            "mean_f1": float(np.mean([row["f1"] for row in rows])) if rows else 0.0,
+            "accuracy_f1_gt_0_5": (
+                float(np.mean([row["f1"] > 0.5 for row in rows])) if rows else 0.0
+            ),
+            "extended_metrics": {},
+        }
+        for key in metric_keys:
+            values = [row[key] for row in rows if key in row and row[key] is not None]
+            group_summary["extended_metrics"][key] = float(np.mean(values)) if values else 0.0
+        summary["by_type"][group_name] = group_summary
+    return summary
 
 
 def main() -> None:
     args = parse_args()
-    from src.core.generators.qwen_vl_generator import create_table_generator
+    if args.prompt_style == "smart_universal":
+        from src.core.generators.qwen_vl_generator_promt_style import create_table_generator
+    else:
+        from src.core.generators.qwen_vl_generator import create_table_generator
 
     with args.input.open("r", encoding="utf-8") as fh:
         payload = json.load(fh)
-    rows = payload["rows"]
+    rows = payload.get("rows") or payload.get("results") or []
     if args.start:
         rows = rows[args.start :]
     if args.limit > 0:
@@ -514,6 +524,7 @@ def main() -> None:
     results = []
     latencies = []
     for idx, row in enumerate(rows, start=1 + args.start):
+        expected = row.get("answer") or row.get("expected") or ""
         effective_top_pages, effective_crop_policy, visual_context = effective_context_settings(
             args, row
         )
@@ -542,11 +553,11 @@ def main() -> None:
         latency = time.time() - start_time
         latencies.append(latency)
 
-        exact, f1 = compute_similarity(answer, row["answer"])
-        extended_metrics = compute_extended_metrics(answer, row["answer"])
+        exact, f1 = compute_similarity(answer, expected)
+        extended_metrics = compute_extended_metrics(answer, expected)
         result = {
             "question": row["question"],
-            "expected": row["answer"],
+            "expected": expected,
             "generated": answer,
             "raw_generated": getattr(generator, "last_raw_output", answer),
             "vlm_think": getattr(generator, "last_reasoning", ""),
@@ -558,6 +569,7 @@ def main() -> None:
             "effective_top_pages": effective_top_pages,
             "effective_crop_policy": effective_crop_policy,
             "visual_context": visual_context,
+            "oracle_pages": row.get("oracle_pages", []),
             "pages": candidates,
             **extended_metrics,
         }
@@ -566,7 +578,7 @@ def main() -> None:
             think = (result["vlm_think"] or result["raw_generated"] or "").replace("\n", " ")
             print(f"    think={think[:500]}")
         print(f"    generated={answer[:240]}")
-        print(f"    expected={row['answer']}")
+        print(f"    expected={expected}")
         print(f"    exact={exact} f1={f1:.3f} latency={latency:.2f}s")
 
         partial = {

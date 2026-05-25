@@ -1,56 +1,234 @@
-﻿# Multimodal Page Retrieval for DocBench
+# Reranking Multimodal Data
 
-This repository is now organized around one research path: multimodal page retrieval for PDF document QA.
+Clean research pipeline for multimodal document question answering on DocBench-style PDF pages.
 
-Pipeline:
+The current system evaluates a multimodal RAG stack:
 
-1. PDF pages are available as PNG files under `data/datasets/docbench/*/extracted/pages`.
-2. Page PNGs are embedded with `Qwen/Qwen3-VL-Embedding-2B` through the SentenceTransformers wrapper.
-3. Normalized page vectors are stored in FAISS `IndexFlatIP`.
-4. Text queries are embedded with the same model contract and searched against page vectors.
-5. Optional `nvidia/llama-nemotron-rerank-vl-1b-v2` reranks page images.
-6. `Qwen/Qwen3-VL-8B-Instruct` answers from page images only.
-
-The current production/research code lives in `src/mmrag`.
-
-## Main Commands
-
-Build the Qwen3 page index:
-
-```bash
-python scripts/build_page_index.py --index-name pages_qwen3 --device cuda --batch-size 1
+```text
+DocBench pages -> ColPali/ColVision retrieval -> Nemotron reranking -> page/crop selection
+-> Qwen3-VL answer generation -> metrics/reporting
 ```
 
-Inspect index provenance and retrieval scores:
+The repository now keeps publication-facing entrypoints in `scripts/`, reusable code in `src/`,
+experiment configs in `configs/experiments/`, and old exploratory code in `archive/`.
 
-```bash
-python scripts/diagnose_retrieval.py "What is the test set accuracy of BERT (Large)?" --top-k 30
+## Project Layout
+
+```text
+configs/experiments/        reproducible experiment configs
+src/data/                   dataset abstraction
+src/mmrag/                  shared DocBench schema, dataset loading, and reranker config
+src/reranking/              unified reranker interfaces
+src/cropping/               layout-aware crop helpers
+src/core/generators/        Qwen3-VL generation code
+src/evaluation/             metrics and success criteria checks
+src/reporting/              tables, plot data, error analysis
+scripts/run_experiment.py   one-command experiment runner
+scripts/evaluate_full_pipeline_layout_aware_clean.py
+                            full ColPali -> Nemotron -> layout-aware -> Qwen3-VL evaluator
+scripts/evaluate.py         recompute metrics from predictions.jsonl
+scripts/generate_report.py  aggregate report generation
+data/                       datasets, intermediate candidates, debug crops
+results/                    experiment outputs
+reports/                    paper-facing tables/figures/error analysis
+archive/                    old diagnostics and exploratory scripts
 ```
 
-Run the page-only RAG pipeline:
+## Fresh Clone Setup
+
+Install dependencies:
 
 ```bash
-python scripts/run_page_rag.py "What is the test set accuracy of BERT (Large)?"
+uv venv
+source .venv/bin/activate
+uv sync
 ```
 
-Compatibility entrypoints kept for older commands:
+On Windows PowerShell:
+
+```powershell
+uv venv
+.\.venv\Scripts\Activate.ps1
+uv sync
+```
+
+The experiments require CUDA for the reported latency and quality. The current production-like
+pipeline uses `vidore/colpali-v1.3-merged` for ColPali/ColVision retrieval,
+`nvidia/llama-nemotron-rerank-vl-1b-v2` for multimodal reranking, and
+`Qwen/Qwen3-VL-8B-Instruct` for answer generation.
+
+Recommended reproducibility hardware:
+
+- NVIDIA CUDA GPU;
+- 24 GB VRAM minimum for Qwen3-VL-8B fp16 on 3-5 page images;
+- 40 GB+ VRAM recommended for stable full runs;
+- 32-64 GB system RAM;
+- enough disk for DocBench page PNGs, model cache, FAISS indexes, and results.
+
+## Data Layout
+
+DocBench pages should be available as PNG files:
+
+```text
+data/datasets/docbench/<document_id>/extracted/pages/page_<N>.png
+data/datasets/docbench/<document_id>/<document_id>_qa.jsonl
+```
+
+Each document may also contain:
+
+```text
+data/datasets/docbench/<document_id>/extracted/doc_report.json
+```
+
+## Build ColPali/ColVision Page Index
+
+Build the current ColPali/ColVision page index:
 
 ```bash
-python scripts/build_index_qwen3_v2.py
-python scripts/evaluate_rag_v2.py
+python scripts/build_colvision_index_clean.py \
+  --data-dir data/datasets/docbench \
+  --index-dir index_colpali_v1_3_merged \
+  --index-name pages_colpali_v1_3_merged_clean \
+  --model-id vidore/colpali-v1.3-merged \
+  --device cuda
 ```
 
-## Important Invariants
+Expected artifacts:
 
-- Do not use BM25/OCR/text indexing as the primary retrieval source for the page-retrieval experiments.
-- Do not mix index artifacts across CLIP, SigLIP, Qwen AutoModel pooling, and Qwen SentenceTransformers.
-- Every new FAISS page index must have a manifest with model id, backend, dimension, normalization, query prompt, and data path.
-- Reranking is not a replacement for first-stage recall. Always measure whether the correct page is in the first-stage candidate set.
+```text
+index_colpali_v1_3_merged/metadata_pages_colpali_v1_3_merged_clean.json
+index_colpali_v1_3_merged/manifest_pages_colpali_v1_3_merged_clean.json
+index_colpali_v1_3_merged/shards/*.pt
+```
 
-## Audit
+## Full Production-Like Evaluation
 
-See `docs/retrieval_audit_2026-05-10.md` for the technical audit, root-cause hypotheses, and validation experiments.
+This is the main honest evaluation path. It starts from the question, retrieves pages with
+ColPali/ColVision, reranks them with Nemotron, applies layout-aware page/crop selection, generates
+the answer with Qwen3-VL, and then computes metrics.
 
-## Archive
+```bash
+python scripts/evaluate_full_pipeline_layout_aware_clean.py \
+  --first-stage-top-k 30 \
+  --rerank-top-k 10 \
+  --adaptive-policy text_top3_visual_top5 \
+  --text-top-pages 3 \
+  --visual-top-pages 5 \
+  --visual-crop-policy layout_aware_v2 \
+  --layout-context-mode full_page_plus_crop \
+  --prompt-style concise \
+  --output data/eval_full_pipeline_colpali_nemotron_layout_aware_v2_308.json
+```
 
-Legacy experiments and duplicate pipelines were moved to `_archive/legacy_scripts`. Tool caches were moved to `_archive/tool_caches`. Nothing was deleted.
+## Reproduce Current Candidate-Based Results
+
+The current prompt/crop ablations use cached reranked page candidates:
+
+```text
+data/eval_vlm_reranked_adaptive_clean_rerun_full_308.json
+```
+
+Run the current full ColPali pipeline as a single command:
+
+```bash
+python scripts/run_experiment.py --config configs/experiments/full_colpali_layout_aware.yaml
+```
+
+Outputs:
+
+```text
+results/full_colpali_layout_aware/
+  predictions.jsonl
+  predictions_raw.json
+  metrics.json
+  metrics_table.csv
+  metrics_table.md
+  config.yaml
+  run.log
+  error_cases.csv
+  summary.md
+```
+
+Older cached-candidate prompt/crop ablations were moved to
+`archive/legacy_ablation_scripts/`. They are preserved for auditability, but they are no longer
+the main publication pipeline because they start from precomputed candidates rather than full
+retrieval.
+
+## Metrics
+
+Recompute metrics from any experiment:
+
+```bash
+python scripts/evaluate.py --predictions results/baseline/predictions.jsonl
+```
+
+Implemented metrics:
+
+- exact match;
+- token F1;
+- F1 > 0.5 accuracy;
+- relaxed exact;
+- containment metrics;
+- numeric any/all/precision/recall;
+- latency mean/p50/p95;
+- crop used rate;
+- crop type mismatch rate;
+- caption match rate.
+
+## Success Criteria
+
+A question is successfully processed if:
+
+- no runtime error occurs;
+- retrieved pages exist;
+- the VLM returns a non-empty answer;
+- latency is recorded;
+- prediction is saved;
+- metrics are computed;
+- missing answers are represented exactly as `NOT FOUND`.
+
+See `docs/success_criteria.md`.
+
+## Reporting
+
+Generate aggregate tables and plot data:
+
+```bash
+python scripts/generate_report.py --results-dir results --reports-dir reports
+python scripts/generate_metrics_tables.py --results-dir results --output reports/tables/metrics_by_experiment.md
+python scripts/generate_plots.py --results-dir results --output-dir reports/figures
+```
+
+Generate error analysis:
+
+```bash
+python scripts/generate_error_analysis.py \
+  --predictions results/baseline/predictions.jsonl \
+  --output reports/error_analysis/baseline_errors.csv
+```
+
+## Archive Policy
+
+Old diagnostics, duplicated experiments, and exploratory scripts are preserved under `archive/`.
+They are not part of the publication pipeline, but remain available for auditability.
+
+Qwen embedding retrieval experiments were moved to:
+
+```text
+archive/qwen_retrieval_experiments/
+```
+
+That archive contains the old Qwen3-VL embedding index builders, Qwen retrieval evaluators, and the
+old page-RAG pipeline that depended on `Qwen/Qwen3-VL-Embedding-2B`. They are kept only for audit
+history; the current pipeline uses ColPali/ColVision retrieval.
+
+Legacy staged ablation scripts were moved to:
+
+```text
+archive/legacy_ablation_scripts/
+```
+
+That archive contains cached-candidate VLM evaluators, prompt/crop comparison scripts, ColVision
+diagnostics, candidate export, and standalone Nemotron rerank diagnostics. The code needed by the
+current pipeline was extracted into `src/retrieval/colvision.py`, `src/evaluation/vlm_eval.py`, and
+`src/cropping/layout_aware_eval.py`.

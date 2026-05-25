@@ -1,0 +1,18 @@
+experiment_name: multimodal_layout_aware
+results_root: results/ablations
+dataset:
+  name: docbench
+  input_candidates: data/eval_vlm_reranked_adaptive_clean_rerun_full_308.json
+evaluation:
+  evaluator: layout_aware
+  mode: reranked
+  adaptive_policy: text_top3_visual_top5
+  text_top_pages: 3
+  visual_top_pages: 5
+generation:
+  prompt_style: smart_universal
+  no_4bit: false
+cropping:
+  visual_crop_policy: layout_aware_v2
+  layout_context_mode: full_page_plus_crop
+  debug_crop_dir: data/debug_crops/layout_aware_v2_full_page_plus_crop
