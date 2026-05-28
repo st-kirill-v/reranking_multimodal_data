@@ -40,6 +40,14 @@ def _as_bool(value: Any) -> bool:
     return bool(value) and str(value).lower() not in {"0", "false", "no", "none"}
 
 
+def _as_list(value: Any, default: list[str]) -> list[str]:
+    if value is None:
+        return default
+    if isinstance(value, list):
+        return [str(item) for item in value]
+    return [str(value)]
+
+
 def build_eval_command(config: dict[str, Any], raw_output: Path) -> list[str]:
     eval_cfg = config.get("evaluation", {})
     crop_cfg = config.get("cropping", {})
@@ -49,6 +57,68 @@ def build_eval_command(config: dict[str, Any], raw_output: Path) -> list[str]:
     rerank_cfg = config.get("reranking", {})
 
     evaluator = eval_cfg.get("evaluator", "layout_aware")
+    if evaluator == "hybrid_bm25":
+        text_cfg = config.get("text_pipeline", {})
+        command = [
+            sys.executable,
+            "scripts/evaluate_docbench_hybrid_bm25.py",
+            "--data-dir",
+            str(dataset_cfg.get("data_dir", "data/datasets/docbench")),
+            "--types",
+            *_as_list(dataset_cfg.get("types"), ["all"]),
+            "--routing-mode",
+            str(config.get("routing_mode", "by_official_type")),
+            "--text-index-dir",
+            str(text_cfg.get("text_index_dir", "data/indexes/docbench_bm25")),
+            "--text-top-k",
+            str(text_cfg.get("text_top_k", 5)),
+            "--text-context-max-chars",
+            str(text_cfg.get("text_context_max_chars", 12000)),
+            "--index-dir",
+            str(retrieval_cfg.get("index_dir", "index_colpali_v1_3_merged")),
+            "--index-name",
+            str(retrieval_cfg.get("index_name", "pages_colpali_v1_3_merged_clean")),
+            "--retriever-model-id",
+            str(retrieval_cfg.get("model_id", "vidore/colpali-v1.3-merged")),
+            "--first-stage-top-k",
+            str(retrieval_cfg.get("first_stage_top_k", 30)),
+            "--rerank-top-k",
+            str(rerank_cfg.get("top_k", 10)),
+            "--adaptive-policy",
+            str(eval_cfg.get("adaptive_policy", "text_top3_visual_top5")),
+            "--text-top-pages",
+            str(eval_cfg.get("text_top_pages", 3)),
+            "--visual-top-pages",
+            str(eval_cfg.get("visual_top_pages", 5)),
+            "--visual-crop-policy",
+            str(crop_cfg.get("visual_crop_policy", "layout_aware_v2")),
+            "--layout-context-mode",
+            str(crop_cfg.get("layout_context_mode", "full_page_plus_crop")),
+            "--debug-crop-dir",
+            str(crop_cfg.get("debug_crop_dir", "data/debug_crops/docbench_hybrid_bm25")),
+            "--prompt-style",
+            str(generation_cfg.get("prompt_style", "concise")),
+            "--prompt-profile",
+            str(generation_cfg.get("prompt_profile", config.get("prompt_profile", "legacy"))),
+            "--max-new-tokens",
+            str(generation_cfg.get("max_new_tokens", 192)),
+            "--max-context-images",
+            str(generation_cfg.get("max_context_images", 5)),
+            "--max-image-long-edge",
+            str(generation_cfg.get("max_image_long_edge", 1600)),
+            "--answer-refine",
+            str(generation_cfg.get("answer_refine", "none")),
+            "--output",
+            str(raw_output),
+        ]
+        if _as_bool(generation_cfg.get("no_4bit", False)):
+            command.append("--no-4bit")
+        if _as_bool(generation_cfg.get("do_sample", False)):
+            command.append("--do-sample")
+        if eval_cfg.get("limit"):
+            command.extend(["--limit", str(eval_cfg["limit"])])
+        return command
+
     if evaluator == "full_pipeline":
         command = [
             sys.executable,
@@ -167,16 +237,23 @@ def normalize_prediction_row(row: dict[str, Any], config: dict[str, Any]) -> dic
     crop = selected_crop(row)
     retrieved_pages = page_labels(row.get("retrieved_candidates") or [])
     reranked_pages = page_labels(row.get("reranked_candidates") or [])
-    selected_pages = page_labels(row.get("pages") or [])
+    selected_pages = page_labels(row.get("pages") or []) or row.get("selected_pages") or []
     return {
         **row,
         "expected_answer": row.get("expected"),
         "generated_answer": row.get("generated"),
         "exact_match": row.get("exact_match", row.get("exact")),
+        "original_type": row.get("original_type") or row.get("type"),
+        "pipeline_used": row.get("pipeline_used"),
+        "prompt_profile": row.get("prompt_profile")
+        or generation_cfg.get("prompt_profile")
+        or config.get("prompt_profile"),
+        "prompt_name": row.get("prompt_name"),
         "dataset": dataset_cfg.get("name", "docbench"),
         "dataset_split": dataset_cfg.get("split") or dataset_cfg.get("subset"),
         "document_id": row.get("expected_folder"),
-        "retrieved_pages": retrieved_pages,
+        "retrieved_pages": retrieved_pages or row.get("retrieved_pages") or [],
+        "retrieved_text_pages": row.get("retrieved_text_pages") or [],
         "reranked_pages": reranked_pages,
         "selected_pages": selected_pages,
         "crop_used": bool(row.get("crop_used") or row.get("crop_path")),
@@ -186,12 +263,15 @@ def normalize_prediction_row(row: dict[str, Any], config: dict[str, Any]) -> dic
         "retrieval_mode": retrieval_cfg.get("mode", "colpali_colvision_multivector"),
         "reranker_mode": rerank_cfg.get("mode", "nemotron_vl_cross_encoder"),
         "crop_policy": crop_cfg.get("crop_policy") or crop_cfg.get("visual_crop_policy"),
-        "context_mode": crop_cfg.get("context_mode") or crop_cfg.get("layout_context_mode"),
+        "context_mode": row.get("context_mode")
+        or crop_cfg.get("context_mode")
+        or crop_cfg.get("layout_context_mode"),
         "latency_total": row.get("latency"),
         "latency_retrieval": row.get("retrieval_latency"),
         "latency_rerank": row.get("rerank_latency"),
         "latency_context": row.get("context_latency"),
         "latency_vlm": row.get("vlm_latency"),
+        "latency_generation": row.get("latency_generation") or row.get("vlm_latency"),
     }
 
 
@@ -199,7 +279,7 @@ def validate_prediction(row: dict[str, Any], config: dict[str, Any]) -> dict[str
     row = normalize_prediction_row(row, config)
     errors = []
     generated = row.get("generated_answer")
-    pages = row.get("selected_pages") or []
+    pages = row.get("selected_pages") or row.get("retrieved_text_pages") or []
     if row.get("runtime_error"):
         errors.append("runtime_error")
     if not pages:
@@ -334,9 +414,22 @@ def main() -> None:
     log_path.write_text(log_header(args.config, results_dir, config, command), encoding="utf-8")
 
     with log_path.open("a", encoding="utf-8") as log:
-        process = subprocess.run(command, cwd=ROOT, stdout=log, stderr=subprocess.STDOUT, text=True)
-    if process.returncode != 0:
-        raise SystemExit(f"Experiment failed with exit code {process.returncode}; see {log_path}")
+        process = subprocess.Popen(
+            command,
+            cwd=ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+        assert process.stdout is not None
+        for line in process.stdout:
+            print(line, end="", flush=True)
+            log.write(line)
+            log.flush()
+        return_code = process.wait()
+    if return_code != 0:
+        raise SystemExit(f"Experiment failed with exit code {return_code}; see {log_path}")
 
     predictions = convert_raw_output(raw_output, results_dir, config)
     metrics = write_metrics_artifacts(predictions, results_dir)

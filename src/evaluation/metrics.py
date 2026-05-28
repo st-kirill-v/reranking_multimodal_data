@@ -195,8 +195,12 @@ def summarize_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
         if row.get("latency_vlm", row.get("vlm_latency")) is not None
     ]
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    grouped_original_type: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    grouped_pipeline_used: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
         grouped[row.get("modality") or row.get("type") or "unknown"].append(row)
+        grouped_original_type[row.get("original_type") or row.get("type") or "unknown"].append(row)
+        grouped_pipeline_used[row.get("pipeline_used") or "unknown"].append(row)
     crop_used = [bool(row.get("crop_used") or row.get("crop_path")) for row in rows]
     crop_mismatch = [bool(row.get("crop_type_mismatch")) for row in rows]
     caption_match = [bool(row.get("caption_match")) for row in rows]
@@ -264,6 +268,28 @@ def summarize_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
                 ),
             }
             for key, value in grouped.items()
+        },
+        "by_original_type": {
+            key: {
+                "count": len(value),
+                "exact_match": _mean(value, "exact_match"),
+                "mean_f1": _mean(value, "f1"),
+                "accuracy_f1_gt_0_5": (
+                    mean([float(row.get("f1", 0.0)) > 0.5 for row in value]) if value else 0.0
+                ),
+            }
+            for key, value in grouped_original_type.items()
+        },
+        "by_pipeline_used": {
+            key: {
+                "count": len(value),
+                "exact_match": _mean(value, "exact_match"),
+                "mean_f1": _mean(value, "f1"),
+                "accuracy_f1_gt_0_5": (
+                    mean([float(row.get("f1", 0.0)) > 0.5 for row in value]) if value else 0.0
+                ),
+            }
+            for key, value in grouped_pipeline_used.items()
         },
         "grounding": {
             "crop_used_rate": sum(crop_used) / total,
