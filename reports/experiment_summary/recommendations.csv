@@ -1,0 +1,6 @@
+﻿category,experiment,short_name,mean_f1,f1_gt_0_5,multimodal_t_mean_f1,multimodal_f_mean_f1,latency_mean,reason
+Best quality,image_text_full_308_nemotron_qwen3vl30b,Nemotron full image+text + VL reranker + Qwen30B,0.7023,0.7565,0.7201,0.6578,13.6441,Maximum Mean F1.
+Best speed,image_text_fusion_308_nemotron_no_reranker_qwen3vl30b,Fusion Nemotron no image reranker + Qwen30B,0.6575,0.6786,0.6786,0.6047,2.5080,Lowest latency among experiments with Mean F1 >= 0.65.
+Best balanced,text_reranker_308_no_reranker_qwen3vl30b,BM25 no reranker + Qwen30B,0.5144,0.5325,0.5269,0.4830,0.7146,Maximum Mean F1 / log(1 + latency).
+Best text-only baseline,text_reranker_308_bge_large_qwen3vl30b,BM25 + BGE-reranker-large + Qwen30B,0.5497,0.5714,0.5542,0.5385,1.2344,Best experiment in the BM25 text-reranking family.
+Best no-reranker variant,image_text_full_308_nemotron_no_reranker_qwen3vl30b,Nemotron full image+text no reranker + Qwen30B,0.6784,0.7143,0.7029,0.6169,3.4263,Best Mean F1 among rows without reranker.

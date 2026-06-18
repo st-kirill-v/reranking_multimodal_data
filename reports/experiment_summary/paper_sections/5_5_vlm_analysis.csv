@@ -1,0 +1,3 @@
+﻿vlm,count_experiments,mean_mean_f1,mean_latency,best_experiment
+Qwen3-VL-30B,18,0.6074,5.3796,image_text_full_308_nemotron_qwen3vl30b
+Qwen3-VL-8B,2,0.5913,12.6087,multimodal_308_with_reranker

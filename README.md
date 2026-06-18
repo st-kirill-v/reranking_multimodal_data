@@ -1,50 +1,147 @@
-# Reranking Multimodal Data
+﻿# Тема: Разработка алгоритма реранкинга мультимодальных данных
 
-Clean research pipeline for multimodal document question answering on DocBench-style PDF pages.
+> Исследование посвящено разработке и оценке алгоритма **реранкинга мультимодальных данных** для задач Document Question Answering.
 
-The current system evaluates a multimodal RAG stack:
+Основная задача проекта — определить, как мультимодальный реранкинг помогает выбирать релевантные текстовые и визуальные evidence из PDF-документов. Retrieval, evidence construction и VLM используются как элементы экспериментального контура, но центральным объектом исследования остаётся именно этап реранкинга.
+
+[![Python](https://img.shields.io/badge/Python-3.11%2B-blue)](pyproject.toml)
+[![Dataset](https://img.shields.io/badge/Dataset-DocBench-green)](#dataset)
+[![Task](https://img.shields.io/badge/Task-Multimodal%20Reranking-purple)](#project-overview)
+[![Paper](https://img.shields.io/badge/Paper-article__final.md-orange)](article_final.md)
+
+---
+
+## Навигация
+
+| Раздел | Ссылка |
+| --- | --- |
+| О проекте | [Project Overview](#project-overview) |
+| Pipeline | [Pipeline](#pipeline) |
+| Данные и модели | [Dataset & Models](#dataset--models) |
+| Результаты | [Results](#results) |
+| Запуск | [Quick Start](#quick-start) |
+| Воспроизведение | [Reproducing](#reproducing) |
+| Документация | [Documentation](#documentation) |
+
+---
+
+<a id="project-overview"></a>
+
+## Project Overview
+
+**Document Question Answering** — это задача ответа на вопросы по документам. Для PDF-документов ответ может зависеть не только от текста, но и от таблиц, графиков, изображений страниц и layout-структуры.
+
+В этом проекте исследуется не общий Multimodal RAG и не сравнение VLM, а именно **мультимодальный реранкинг**: этап, который переупорядочивает найденные страницы-кандидаты и выбирает evidence для генерации ответа.
+
+Основной научный вклад:
+
+- построен воспроизводимый Document QA pipeline;
+- проведено сравнение `No Reranker`, `Text Reranker` и `Multimodal Reranker`;
+- показано, что мультимодальный реранкинг улучшает качество, но увеличивает latency;
+- определены сильные конфигурации для quality-oriented и speed-oriented сценариев.
+
+---
+
+<a id="pipeline"></a>
+
+## Pipeline
 
 ```text
-DocBench pages -> ColPali/ColVision retrieval -> Nemotron reranking -> page/crop selection
--> Qwen3-VL answer generation -> metrics/reporting
+Question
+   ↓
+Candidate Generation
+   ↓
+Multimodal Reranking
+   ↓
+Evidence Construction
+   ↓
+Qwen3-VL
+   ↓
+Answer
 ```
 
-The repository now keeps publication-facing entrypoints in `scripts/`, reusable code in `src/`,
-experiment configs in `configs/experiments/`, and old exploratory code in `archive/`.
+В pipeline используются:
 
-## Project Layout
+- **retrievers:** Nemotron, ColPali / ColVision, BM25, BGE;
+- **rerankers:** Nemotron VL Reranker, BGE, Jina, MiniLM;
+- **VLM:** Qwen3-VL-30B, Qwen3-VL-8B;
+- **evidence:** page text, OCR, captions, table text, full page, layout crop.
 
-```text
-configs/experiments/        reproducible experiment configs
-src/data/                   dataset abstraction
-src/mmrag/                  shared DocBench schema, dataset loading, and reranker config
-src/reranking/              unified reranker interfaces
-src/cropping/               layout-aware crop helpers
-src/core/generators/        Qwen3-VL generation code
-src/evaluation/             metrics and success criteria checks
-src/reporting/              tables, plot data, error analysis
-scripts/run_experiment.py   one-command experiment runner
-scripts/evaluate_full_pipeline_layout_aware_clean.py
-                            full ColPali -> Nemotron -> layout-aware -> Qwen3-VL evaluator
-scripts/evaluate.py         recompute metrics from predictions.jsonl
-scripts/generate_report.py  aggregate report generation
-data/                       datasets, intermediate candidates, debug crops
-results/                    experiment outputs
-reports/                    paper-facing tables/figures/error analysis
-archive/                    old diagnostics and exploratory scripts
+Retrieval и VLM рассматриваются как компоненты, влияющие на эффективность реранкинга, а не как самостоятельный объект исследования.
+
+---
+
+<a id="dataset--models"></a>
+
+## Dataset & Models
+
+Эксперименты выполнены на мультимодальном подмножестве **DocBench**.
+
+| Параметр | Значение |
+| --- | ---: |
+| PDF-документы | 229 |
+| Вопросы в полном DocBench | 1,102 |
+| Используемые multimodal questions | 308 |
+| Типы вопросов | `multimodal-t`, `multimodal-f` |
+
+| Component | Models |
+| --- | --- |
+| Retrievers | Nemotron image retrieval, ColPali / ColVision, BM25, BGE text encoders |
+| Rerankers | Nemotron VL Reranker, BGE-reranker-base, BGE-reranker-large, Jina, MiniLM |
+| VLM | Qwen3-VL-30B, Qwen3-VL-8B |
+
+---
+
+<a id="results"></a>
+
+## Results
+
+Ключевые результаты из итоговой статьи:
+
+| Результат | Конфигурация | Mean F1 | Latency |
+| --- | --- | ---: | ---: |
+| Лучшее качество | Nemotron full image+text + VL reranker + Qwen3-VL-30B | **0.7023** | 13.6441 sec |
+| Лучший быстрый вариант | Fusion Nemotron no image reranker + Qwen3-VL-30B | **0.6575** | **2.5080 sec** |
+| Лучший text-reranker baseline | BM25 + BGE-reranker-large + Qwen3-VL-30B | 0.5497 | 1.2344 sec |
+
+| Итог | Значение |
+| --- | ---: |
+| Средний прирост от reranking | **+0.0428 Mean F1** |
+| Средняя стоимость по latency | **+5.8355 sec** |
+
+Основные выводы:
+
+- реранкинг стабильно улучшает качество Document QA;
+- мультимодальный реранкинг превосходит текстовый реранкинг;
+- Nemotron retrieval формирует наиболее сильные candidate pools;
+- `full page + layout crop` является наиболее эффективной evidence strategy;
+- рост качества сопровождается увеличением latency.
+
+Полные таблицы:
+
+- [paper_multimodal_308.md](reports/tables/paper_multimodal_308.md)
+- [paper_multimodal_308.csv](reports/tables/paper_multimodal_308.csv)
+- [experiment summary](reports/experiment_summary/)
+
+---
+
+<a id="quick-start"></a>
+
+## Quick Start
+
+```bash
+git clone https://github.com/st-kirill-v/reranking_multimodal_data.git
+cd reranking_multimodal_data
 ```
 
-## Fresh Clone Setup
-
-Install dependencies:
+Через `uv`:
 
 ```bash
 uv venv
-source .venv/bin/activate
 uv sync
 ```
 
-On Windows PowerShell:
+Windows PowerShell:
 
 ```powershell
 uv venv
@@ -52,183 +149,87 @@ uv venv
 uv sync
 ```
 
-The experiments require CUDA for the reported latency and quality. The current production-like
-pipeline uses `vidore/colpali-v1.3-merged` for ColPali/ColVision retrieval,
-`nvidia/llama-nemotron-rerank-vl-1b-v2` for multimodal reranking, and
-`Qwen/Qwen3-VL-8B-Instruct` for answer generation.
+Для экспериментов с Qwen3-VL через OpenAI-compatible backend:
 
-Recommended reproducibility hardware:
-
-- NVIDIA CUDA GPU;
-- 24 GB VRAM minimum for Qwen3-VL-8B fp16 on 3-5 page images;
-- 40 GB+ VRAM recommended for stable full runs;
-- 32-64 GB system RAM;
-- enough disk for DocBench page PNGs, model cache, FAISS indexes, and results.
-
-## Data Layout
-
-DocBench pages should be available as PNG files:
-
-```text
-data/datasets/docbench/<document_id>/extracted/pages/page_<N>.png
-data/datasets/docbench/<document_id>/<document_id>_qa.jsonl
+```powershell
+$env:OPENAI_COMPAT_API_KEY="..."
 ```
 
-Each document may also contain:
+---
 
-```text
-data/datasets/docbench/<document_id>/extracted/doc_report.json
-```
+<a id="reproducing"></a>
 
-## Build ColPali/ColVision Page Index
+## Reproducing
 
-Build the current ColPali/ColVision page index:
+Основной запуск выполняется через YAML-конфиги:
 
 ```bash
-python scripts/build_colvision_index_clean.py \
-  --data-dir data/datasets/docbench \
-  --index-dir index_colpali_v1_3_merged \
-  --index-name pages_colpali_v1_3_merged_clean \
-  --model-id vidore/colpali-v1.3-merged \
-  --device cuda
+python scripts/run_experiment.py \
+  --config configs/experiments/image_text_full_308_nemotron_qwen3vl30b.yaml
 ```
 
-Expected artifacts:
-
-```text
-index_colpali_v1_3_merged/metadata_pages_colpali_v1_3_merged_clean.json
-index_colpali_v1_3_merged/manifest_pages_colpali_v1_3_merged_clean.json
-index_colpali_v1_3_merged/shards/*.pt
-```
-
-## Full Production-Like Evaluation
-
-This is the main honest evaluation path. It starts from the question, retrieves pages with
-ColPali/ColVision, reranks them with Nemotron, applies layout-aware page/crop selection, generates
-the answer with Qwen3-VL, and then computes metrics.
+No-reranker baseline:
 
 ```bash
-python scripts/evaluate_full_pipeline_layout_aware_clean.py \
-  --first-stage-top-k 30 \
-  --rerank-top-k 10 \
-  --adaptive-policy text_top3_visual_top5 \
-  --text-top-pages 3 \
-  --visual-top-pages 5 \
-  --visual-crop-policy layout_aware_v2 \
-  --layout-context-mode full_page_plus_crop \
-  --prompt-style concise \
-  --output data/eval_full_pipeline_colpali_nemotron_layout_aware_v2_308.json
+python scripts/run_experiment.py \
+  --config configs/experiments/image_text_full_308_nemotron_no_reranker_qwen3vl30b.yaml
 ```
 
-## Reproduce Current Candidate-Based Results
-
-The current prompt/crop ablations use cached reranked page candidates:
-
-```text
-data/eval_vlm_reranked_adaptive_clean_rerun_full_308.json
-```
-
-Run the current full ColPali pipeline as a single command:
+Text-reranker baseline:
 
 ```bash
-python scripts/run_experiment.py --config configs/experiments/full_colpali_layout_aware.yaml
+python scripts/run_experiment.py \
+  --config configs/experiments/text_reranker_308_bge_large_qwen3vl30b.yaml
 ```
 
-Outputs:
-
-```text
-results/full_colpali_layout_aware/
-  predictions.jsonl
-  predictions_raw.json
-  metrics.json
-  metrics_table.csv
-  metrics_table.md
-  config.yaml
-  run.log
-  error_cases.csv
-  summary.md
-```
-
-Older cached-candidate prompt/crop ablations were moved to
-`archive/legacy_ablation_scripts/`. They are preserved for auditability, but they are no longer
-the main publication pipeline because they start from precomputed candidates rather than full
-retrieval.
-
-## Metrics
-
-Recompute metrics from any experiment:
+Агрегация результатов:
 
 ```bash
-python scripts/evaluate.py --predictions results/baseline/predictions.jsonl
+python scripts/build_experiment_summary_tables.py
 ```
 
-Implemented metrics:
-
-- exact match;
-- token F1;
-- F1 > 0.5 accuracy;
-- relaxed exact;
-- containment metrics;
-- numeric any/all/precision/recall;
-- latency mean/p50/p95;
-- crop used rate;
-- crop type mismatch rate;
-- caption match rate.
-
-## Success Criteria
-
-A question is successfully processed if:
-
-- no runtime error occurs;
-- retrieved pages exist;
-- the VLM returns a non-empty answer;
-- latency is recorded;
-- prediction is saved;
-- metrics are computed;
-- missing answers are represented exactly as `NOT FOUND`.
-
-See `docs/success_criteria.md`.
-
-## Reporting
-
-Generate aggregate tables and plot data:
-
-```bash
-python scripts/generate_report.py --results-dir results --reports-dir reports
-python scripts/generate_metrics_tables.py --results-dir results --output reports/tables/metrics_by_experiment.md
-python scripts/generate_plots.py --results-dir results --output-dir reports/figures
-```
-
-Generate error analysis:
-
-```bash
-python scripts/generate_error_analysis.py \
-  --predictions results/baseline/predictions.jsonl \
-  --output reports/error_analysis/baseline_errors.csv
-```
-
-## Archive Policy
-
-Old diagnostics, duplicated experiments, and exploratory scripts are preserved under `archive/`.
-They are not part of the publication pipeline, but remain available for auditability.
-
-Qwen embedding retrieval experiments were moved to:
+Ожидаемые артефакты:
 
 ```text
-archive/qwen_retrieval_experiments/
+reports/tables/paper_multimodal_308.csv
+reports/tables/paper_multimodal_308.md
+reports/experiment_summary/
 ```
 
-That archive contains the old Qwen3-VL embedding index builders, Qwen retrieval evaluators, and the
-old page-RAG pipeline that depended on `Qwen/Qwen3-VL-Embedding-2B`. They are kept only for audit
-history; the current pipeline uses ColPali/ColVision retrieval.
+Подробная методика и экспериментальная постановка описаны в [article_final.md](article_final.md).
 
-Legacy staged ablation scripts were moved to:
+---
 
-```text
-archive/legacy_ablation_scripts/
+<a id="documentation"></a>
+
+## Documentation
+
+| Документ | Описание |
+| --- | --- |
+| [article_final.md](article_final.md) | Итоговая статья на русском языке |
+| [docs/](docs/) | Разделы статьи, аудит, публикационный план |
+| [reports/tables/](reports/tables/) | Таблицы результатов |
+| [reports/experiment_summary/](reports/experiment_summary/) | Агрегированные результаты |
+| [paper_ieee/](paper_ieee/) | IEEE Conference версия статьи |
+
+---
+
+## Citation
+
+```bibtex
+@misc{stulov2026multimodalreranking,
+  title        = {Разработка алгоритма реранкинга мультимодальных данных},
+  author       = {Стулов, Кирилл Вячеславович},
+  year         = {2026},
+  institution  = {Университет ИТМО}
+}
 ```
 
-That archive contains cached-candidate VLM evaluators, prompt/crop comparison scripts, ColVision
-diagnostics, candidate export, and standalone Nemotron rerank diagnostics. The code needed by the
-current pipeline was extracted into `src/retrieval/colvision.py`, `src/evaluation/vlm_eval.py`, and
-`src/cropping/layout_aware_eval.py`.
+---
+
+## Authors
+
+**Автор:** Стулов Кирилл Вячеславович
+**Научный руководитель:** Вершинин Владислав Константинович
+**Организация:** Университет ИТМО
+**Направление:** 09.04.02 Информационные системы и технологии

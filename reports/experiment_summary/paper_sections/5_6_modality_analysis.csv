@@ -1,0 +1,21 @@
+﻿rank_by_mmf,experiment,short_name,family,vlm,mean_f1,multimodal_t_mean_f1,multimodal_f_mean_f1,mm_gap,latency_mean
+1,multimodal_308_nemotron_image_retriever_with_reranker_qwen3vl30b,Nemotron image + VL reranker + Qwen30B,Nemotron image retriever,Qwen3-VL-30B,0.6902,0.7015,0.6620,0.0396,11.0702
+2,docbench_hybrid_bm25_tools_qwen3vl30b,ColPali + VL reranker + Qwen30B,ColPali visual Qwen30B,Qwen3-VL-30B,0.6860,0.6971,0.6582,0.0390,14.8791
+3,image_text_input_308_nemotron_qwen3vl30b,Nemotron image+text input + VL reranker + Qwen30B,Image+text input,Qwen3-VL-30B,0.6979,0.7138,0.6579,0.0559,12.9920
+4,image_text_full_308_nemotron_qwen3vl30b,Nemotron full image+text + VL reranker + Qwen30B,Full image+text,Qwen3-VL-30B,0.7023,0.7201,0.6578,0.0623,13.6441
+5,image_text_fusion_308_colpali_qwen3vl30b,Fusion ColPali + VL reranker + Qwen30B,Image+text fusion,Qwen3-VL-30B,0.6782,0.6906,0.6474,0.0432,11.8085
+6,image_text_fusion_308_nemotron_qwen3vl30b,Fusion Nemotron + VL reranker + Qwen30B,Image+text fusion,Qwen3-VL-30B,0.6793,0.6933,0.6445,0.0488,9.4122
+7,image_text_full_308_nemotron_no_reranker_qwen3vl30b,Nemotron full image+text no reranker + Qwen30B,Full image+text,Qwen3-VL-30B,0.6784,0.7029,0.6169,0.0860,3.4263
+8,docbench_qwen3vl30b_no_reranker,ColPali no reranker + Qwen30B,ColPali visual Qwen30B,Qwen3-VL-30B,0.6539,0.6718,0.6092,0.0626,6.0709
+9,image_text_fusion_308_nemotron_no_reranker_qwen3vl30b,Fusion Nemotron no image reranker + Qwen30B,Image+text fusion,Qwen3-VL-30B,0.6575,0.6786,0.6047,0.0739,2.5080
+10,multimodal_308_nemotron_image_retriever_qwen3vl30b,Nemotron image no reranker + Qwen30B,Nemotron image retriever,Qwen3-VL-30B,0.6479,0.6655,0.6040,0.0615,2.5535
+11,multimodal_308_with_reranker,ColPali + VL reranker + Qwen8B,ColPali visual Qwen8B,Qwen3-VL-8B,0.6170,0.6391,0.5617,0.0774,15.2920
+12,text_reranker_308_bge_large_qwen3vl30b,BM25 + BGE-reranker-large + Qwen30B,BM25 text reranking,Qwen3-VL-30B,0.5497,0.5542,0.5385,0.0156,1.2344
+13,text_reranker_308_bge_base_qwen3vl30b,BM25 + BGE-reranker-base + Qwen30B,BM25 text reranking,Qwen3-VL-30B,0.5429,0.5477,0.5309,0.0168,0.8689
+14,multimodal_308_no_reranker,ColPali no reranker + Qwen8B,ColPali visual Qwen8B,Qwen3-VL-8B,0.5657,0.5911,0.5020,0.0891,9.9253
+15,text_reranker_308_no_reranker_qwen3vl30b,BM25 no reranker + Qwen30B,BM25 text reranking,Qwen3-VL-30B,0.5144,0.5269,0.4830,0.0440,0.7146
+16,text_reranker_308_jina_qwen3vl30b,BM25 + Jina reranker + Qwen30B,BM25 text reranking,Qwen3-VL-30B,0.5303,0.5501,0.4807,0.0694,0.8927
+17,text_reranker_308_minilm_qwen3vl30b,BM25 + MiniLM reranker + Qwen30B,BM25 text reranking,Qwen3-VL-30B,0.5265,0.5463,0.4770,0.0693,0.7538
+18,text_evidence_encoder_308_bge_large_en_v1_5_bge_reranker_large_qwen3vl30b,BGE-large encoder + BGE-large reranker + Qwen30B,Text evidence encoder,Qwen3-VL-30B,0.5354,0.5646,0.4625,0.1021,1.5102
+19,text_evidence_encoder_308_bge_base_en_v1_5_bge_reranker_large_qwen3vl30b,BGE-base encoder + BGE-large reranker + Qwen30B,Text evidence encoder,Qwen3-VL-30B,0.5205,0.5521,0.4414,0.1107,1.4988
+20,text_evidence_encoder_308_bge_large_en_v1_5_no_reranker_qwen3vl30b,BGE-large encoder no reranker + Qwen30B,Text evidence encoder,Qwen3-VL-30B,0.4424,0.4673,0.3801,0.0873,0.9953

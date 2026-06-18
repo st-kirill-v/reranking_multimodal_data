@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -33,6 +34,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run a reproducible experiment from config.")
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument("--types", nargs="*", default=None)
     return parser.parse_args()
 
 
@@ -45,7 +48,55 @@ def _as_list(value: Any, default: list[str]) -> list[str]:
         return default
     if isinstance(value, list):
         return [str(item) for item in value]
+    if isinstance(value, str) and "," in value:
+        return [item.strip() for item in value.split(",") if item.strip()]
     return [str(value)]
+
+
+def append_fusion_args(command: list[str], fusion_cfg: dict[str, Any]) -> None:
+    command.extend(["--fusion-mode", str(fusion_cfg.get("mode", "none"))])
+    if not fusion_cfg:
+        return
+    command.extend(
+        [
+            "--fusion-alpha",
+            str(fusion_cfg.get("alpha", 1.0)),
+            "--fusion-beta",
+            str(fusion_cfg.get("beta", 0.2)),
+            "--fusion-gamma",
+            str(fusion_cfg.get("gamma", 1.0)),
+            "--fusion-lambda-number",
+            str(fusion_cfg.get("lambda_number", 0.05)),
+            "--fusion-lambda-keyword",
+            str(fusion_cfg.get("lambda_keyword", 0.05)),
+            "--fusion-lambda-exact-phrase",
+            str(fusion_cfg.get("lambda_exact_phrase", 0.05)),
+            "--fusion-lambda-table-header",
+            str(fusion_cfg.get("lambda_table_header", 0.20)),
+            "--fusion-text-reranker-model-id",
+            str(fusion_cfg.get("text_reranker_model_id", "BAAI/bge-reranker-large")),
+            "--fusion-text-reranker-device",
+            str(fusion_cfg.get("text_reranker_device", "cuda")),
+            "--fusion-text-reranker-batch-size",
+            str(fusion_cfg.get("text_reranker_batch_size", 4)),
+            "--fusion-text-reranker-max-length",
+            str(fusion_cfg.get("text_reranker_max_length", 512)),
+            "--fusion-text-reranker-backend",
+            str(fusion_cfg.get("text_reranker_backend", "cross_encoder")),
+        ]
+    )
+    if fusion_cfg.get("source_fields"):
+        command.extend(
+            [
+                "--fusion-source-fields",
+                *_as_list(
+                    fusion_cfg.get("source_fields"),
+                    ["page_text", "caption", "table_text"],
+                ),
+            ]
+        )
+    if not _as_bool(fusion_cfg.get("trust_remote_code", True)):
+        command.append("--fusion-no-trust-remote-code")
 
 
 def build_eval_command(config: dict[str, Any], raw_output: Path) -> list[str]:
@@ -59,8 +110,10 @@ def build_eval_command(config: dict[str, Any], raw_output: Path) -> list[str]:
     evaluator = eval_cfg.get("evaluator", "layout_aware")
     if evaluator == "hybrid_bm25":
         text_cfg = config.get("text_pipeline", {})
+        openai_vlm_cfg = generation_cfg.get("openai_vlm", config.get("openai_vlm", {}))
         command = [
             sys.executable,
+            "-u",
             "scripts/evaluate_docbench_hybrid_bm25.py",
             "--data-dir",
             str(dataset_cfg.get("data_dir", "data/datasets/docbench")),
@@ -78,12 +131,22 @@ def build_eval_command(config: dict[str, Any], raw_output: Path) -> list[str]:
             str(retrieval_cfg.get("index_dir", "index_colpali_v1_3_merged")),
             "--index-name",
             str(retrieval_cfg.get("index_name", "pages_colpali_v1_3_merged_clean")),
+            "--retriever-backend",
+            str(retrieval_cfg.get("backend", "colvision")),
             "--retriever-model-id",
             str(retrieval_cfg.get("model_id", "vidore/colpali-v1.3-merged")),
+            "--retrieval-device",
+            str(retrieval_cfg.get("device", "cuda")),
+            "--score-batch-size",
+            str(retrieval_cfg.get("score_batch_size", 1)),
             "--first-stage-top-k",
             str(retrieval_cfg.get("first_stage_top_k", 30)),
             "--rerank-top-k",
             str(rerank_cfg.get("top_k", 10)),
+            "--rerank-device",
+            str(rerank_cfg.get("device", "cuda")),
+            "--rerank-batch-size",
+            str(rerank_cfg.get("batch_size", 1)),
             "--adaptive-policy",
             str(eval_cfg.get("adaptive_policy", "text_top3_visual_top5")),
             "--text-top-pages",
@@ -100,6 +163,8 @@ def build_eval_command(config: dict[str, Any], raw_output: Path) -> list[str]:
             str(generation_cfg.get("prompt_style", "concise")),
             "--prompt-profile",
             str(generation_cfg.get("prompt_profile", config.get("prompt_profile", "legacy"))),
+            "--multimodal-generation-backend",
+            str(generation_cfg.get("multimodal_generation_backend", "local_vlm")),
             "--max-new-tokens",
             str(generation_cfg.get("max_new_tokens", 192)),
             "--max-context-images",
@@ -111,30 +176,76 @@ def build_eval_command(config: dict[str, Any], raw_output: Path) -> list[str]:
             "--output",
             str(raw_output),
         ]
+        if openai_vlm_cfg:
+            command.extend(
+                [
+                    "--openai-vlm-base-url",
+                    str(openai_vlm_cfg.get("base_url", "")),
+                    "--openai-vlm-model",
+                    str(openai_vlm_cfg.get("model", "openai/qwen3-vl-30b")),
+                    "--openai-vlm-api-key-env",
+                    str(openai_vlm_cfg.get("api_key_env", "OPENAI_COMPAT_API_KEY")),
+                    "--openai-vlm-temperature",
+                    str(openai_vlm_cfg.get("temperature", 0)),
+                    "--openai-vlm-max-tokens",
+                    str(
+                        openai_vlm_cfg.get("max_tokens", generation_cfg.get("max_new_tokens", 192))
+                    ),
+                ]
+            )
+            if openai_vlm_cfg.get("api_key"):
+                command.extend(["--openai-vlm-api-key", str(openai_vlm_cfg["api_key"])])
+            if openai_vlm_cfg.get("timeout"):
+                command.extend(["--openai-vlm-timeout", str(openai_vlm_cfg["timeout"])])
         if _as_bool(generation_cfg.get("no_4bit", False)):
             command.append("--no-4bit")
         if _as_bool(generation_cfg.get("do_sample", False)):
             command.append("--do-sample")
+        if _as_bool(text_cfg.get("enable_text_tools", False)):
+            command.append("--enable-text-tools")
         if eval_cfg.get("limit"):
             command.extend(["--limit", str(eval_cfg["limit"])])
         return command
 
     if evaluator == "full_pipeline":
+        reranker_mode = str(rerank_cfg.get("mode", "nemotron_vl_cross_encoder"))
+        if reranker_mode in {"none", "no_reranking"}:
+            reranker_cli_mode = "none"
+        elif reranker_mode in {"nemotron_text_image", "text_image"}:
+            reranker_cli_mode = "nemotron_text_image"
+        else:
+            reranker_cli_mode = "nemotron"
+        openai_vlm_cfg = generation_cfg.get("openai_vlm", config.get("openai_vlm", {}))
         command = [
             sys.executable,
+            "-u",
             "scripts/evaluate_full_pipeline_layout_aware_clean.py",
             "--data-dir",
             str(dataset_cfg.get("data_dir", "data/datasets/docbench")),
+            "--types",
+            *_as_list(dataset_cfg.get("types"), ["multimodal-t", "multimodal-f"]),
             "--index-dir",
             str(retrieval_cfg.get("index_dir", "index_colpali_v1_3_merged")),
             "--index-name",
             str(retrieval_cfg.get("index_name", "pages_colpali_v1_3_merged_clean")),
+            "--retriever-backend",
+            str(retrieval_cfg.get("backend", "colvision")),
             "--retriever-model-id",
             str(retrieval_cfg.get("model_id", "vidore/colpali-v1.3-merged")),
+            "--retrieval-device",
+            str(retrieval_cfg.get("device", "cuda")),
+            "--score-batch-size",
+            str(retrieval_cfg.get("score_batch_size", 1)),
             "--first-stage-top-k",
             str(retrieval_cfg.get("first_stage_top_k", 30)),
+            "--reranker-mode",
+            reranker_cli_mode,
             "--rerank-top-k",
             str(rerank_cfg.get("top_k", 10)),
+            "--rerank-device",
+            str(rerank_cfg.get("device", "cuda")),
+            "--rerank-batch-size",
+            str(rerank_cfg.get("batch_size", 1)),
             "--adaptive-policy",
             str(eval_cfg.get("adaptive_policy", "text_top3_visual_top5")),
             "--text-top-pages",
@@ -149,6 +260,8 @@ def build_eval_command(config: dict[str, Any], raw_output: Path) -> list[str]:
             str(crop_cfg.get("debug_crop_dir", "data/debug_crops/full_pipeline_layout_aware_v2")),
             "--prompt-style",
             str(generation_cfg.get("prompt_style", "concise")),
+            "--device",
+            str(generation_cfg.get("device", "cuda")),
             "--max-new-tokens",
             str(generation_cfg.get("max_new_tokens", 192)),
             "--max-context-images",
@@ -157,13 +270,156 @@ def build_eval_command(config: dict[str, Any], raw_output: Path) -> list[str]:
             str(generation_cfg.get("max_image_long_edge", 1600)),
             "--answer-refine",
             str(generation_cfg.get("answer_refine", "none")),
+            "--multimodal-generation-backend",
+            str(generation_cfg.get("multimodal_generation_backend", "local_vlm")),
             "--output",
             str(raw_output),
         ]
+        if reranker_cli_mode == "nemotron_text_image":
+            command.extend(
+                [
+                    "--rerank-text-max-chars",
+                    str(rerank_cfg.get("text_max_chars", 4096)),
+                ]
+            )
+            if rerank_cfg.get("text_source_fields"):
+                command.extend(
+                    [
+                        "--rerank-text-source-fields",
+                        *_as_list(
+                            rerank_cfg.get("text_source_fields"),
+                            ["table_text", "caption", "page_text", "ocr"],
+                        ),
+                    ]
+                )
+        append_fusion_args(command, config.get("fusion", {}))
+        vlm_text_context_cfg = generation_cfg.get("vlm_text_context", {})
+        if vlm_text_context_cfg:
+            command.extend(
+                [
+                    "--vlm-text-context-mode",
+                    str(vlm_text_context_cfg.get("mode", "none")),
+                    "--vlm-text-max-chars",
+                    str(vlm_text_context_cfg.get("max_chars", 12000)),
+                ]
+            )
+            if vlm_text_context_cfg.get("source_fields"):
+                command.extend(
+                    [
+                        "--vlm-text-source-fields",
+                        *_as_list(
+                            vlm_text_context_cfg.get("source_fields"),
+                            ["ocr", "page_text", "caption", "table_text"],
+                        ),
+                    ]
+                )
+        if openai_vlm_cfg:
+            command.extend(
+                [
+                    "--openai-vlm-base-url",
+                    str(openai_vlm_cfg.get("base_url", "")),
+                    "--openai-vlm-model",
+                    str(openai_vlm_cfg.get("model", "openai/qwen3-vl-30b")),
+                    "--openai-vlm-api-key-env",
+                    str(openai_vlm_cfg.get("api_key_env", "OPENAI_COMPAT_API_KEY")),
+                    "--openai-vlm-temperature",
+                    str(openai_vlm_cfg.get("temperature", 0)),
+                    "--openai-vlm-max-tokens",
+                    str(
+                        openai_vlm_cfg.get("max_tokens", generation_cfg.get("max_new_tokens", 192))
+                    ),
+                ]
+            )
+            if openai_vlm_cfg.get("api_key"):
+                command.extend(["--openai-vlm-api-key", str(openai_vlm_cfg["api_key"])])
+            if openai_vlm_cfg.get("timeout"):
+                command.extend(["--openai-vlm-timeout", str(openai_vlm_cfg["timeout"])])
         if _as_bool(generation_cfg.get("no_4bit", False)):
             command.append("--no-4bit")
         if _as_bool(generation_cfg.get("do_sample", False)):
             command.append("--do-sample")
+        if eval_cfg.get("limit"):
+            command.extend(["--limit", str(eval_cfg["limit"])])
+        return command
+
+    if evaluator == "text_reranker_308":
+        text_cfg = config.get("text_pipeline", {})
+        openai_vlm_cfg = generation_cfg.get("openai_vlm", config.get("openai_vlm", {}))
+        text_retriever_backend = str(retrieval_cfg.get("backend", "bm25"))
+        if text_retriever_backend == "text_page_bm25":
+            text_retriever_backend = "bm25"
+        command = [
+            sys.executable,
+            "-u",
+            "scripts/evaluate_text_reranker_308.py",
+            "--data-dir",
+            str(dataset_cfg.get("data_dir", "data/datasets/docbench")),
+            "--types",
+            *_as_list(dataset_cfg.get("types"), ["multimodal-t", "multimodal-f"]),
+            "--text-retriever-backend",
+            text_retriever_backend,
+            "--first-stage-top-k",
+            str(retrieval_cfg.get("first_stage_top_k", 30)),
+            "--rerank-top-k",
+            str(rerank_cfg.get("top_k", 10)),
+            "--context-top-pages",
+            str(text_cfg.get("context_top_pages", eval_cfg.get("text_top_pages", 3))),
+            "--text-context-max-chars",
+            str(text_cfg.get("text_context_max_chars", 12000)),
+            "--text-reranker-model-id",
+            str(rerank_cfg.get("model_id", "BAAI/bge-reranker-base")),
+            "--text-reranker-device",
+            str(rerank_cfg.get("device", "cuda")),
+            "--text-reranker-batch-size",
+            str(rerank_cfg.get("batch_size", 8)),
+            "--text-reranker-max-length",
+            str(rerank_cfg.get("max_length", 4096)),
+            "--text-reranker-backend",
+            str(rerank_cfg.get("backend", "cross_encoder")),
+            "--openai-vlm-base-url",
+            str(openai_vlm_cfg.get("base_url", "")),
+            "--openai-vlm-model",
+            str(openai_vlm_cfg.get("model", "openai/qwen3-vl-30b")),
+            "--openai-vlm-api-key-env",
+            str(openai_vlm_cfg.get("api_key_env", "OPENAI_COMPAT_API_KEY")),
+            "--openai-vlm-temperature",
+            str(openai_vlm_cfg.get("temperature", 0)),
+            "--openai-vlm-max-tokens",
+            str(openai_vlm_cfg.get("max_tokens", generation_cfg.get("max_new_tokens", 192))),
+            "--openai-vlm-timeout",
+            str(openai_vlm_cfg.get("timeout", 180)),
+            "--output",
+            str(raw_output),
+        ]
+        if text_retriever_backend == "text_encoder":
+            command.extend(
+                [
+                    "--text-encoder-index-dir",
+                    str(
+                        retrieval_cfg.get(
+                            "index_dir", "data/indexes/docbench_text_encoder_bge_base_en_v1_5"
+                        )
+                    ),
+                    "--text-encoder-model-id",
+                    str(retrieval_cfg.get("model_id", "BAAI/bge-base-en-v1.5")),
+                    "--text-encoder-device",
+                    str(retrieval_cfg.get("device", "cuda")),
+                    "--text-encoder-batch-size",
+                    str(retrieval_cfg.get("batch_size", 32)),
+                    "--text-encoder-max-length",
+                    str(retrieval_cfg.get("max_length", 512)),
+                ]
+            )
+            if not _as_bool(retrieval_cfg.get("normalize", True)):
+                command.append("--no-text-encoder-normalize")
+        if text_cfg.get("source_fields"):
+            command.extend(
+                ["--text-source-fields", *_as_list(text_cfg.get("source_fields"), ["page_text"])]
+            )
+        if openai_vlm_cfg.get("api_key"):
+            command.extend(["--openai-vlm-api-key", str(openai_vlm_cfg["api_key"])])
+        if not _as_bool(rerank_cfg.get("trust_remote_code", True)):
+            command.append("--no-trust-remote-code")
         if eval_cfg.get("limit"):
             command.extend(["--limit", str(eval_cfg["limit"])])
         return command
@@ -175,6 +431,7 @@ def build_eval_command(config: dict[str, Any], raw_output: Path) -> list[str]:
     )
     command = [
         sys.executable,
+        "-u",
         script,
         "--input",
         str(
@@ -245,6 +502,17 @@ def normalize_prediction_row(row: dict[str, Any], config: dict[str, Any]) -> dic
         "exact_match": row.get("exact_match", row.get("exact")),
         "original_type": row.get("original_type") or row.get("type"),
         "pipeline_used": row.get("pipeline_used"),
+        "route_subtype": row.get("route_subtype"),
+        "tool_used": row.get("tool_used"),
+        "normalized_answer": row.get("normalized_answer"),
+        "raw_generated_answer": row.get("raw_generated_answer"),
+        "postprocessed_answer": row.get("postprocessed_answer") or row.get("generated"),
+        "generation_backend": row.get("generation_backend")
+        or generation_cfg.get("multimodal_generation_backend")
+        or "local_vlm",
+        "model_name": row.get("model_name") or generation_cfg.get("model_id"),
+        "image_paths_sent": row.get("image_paths_sent") or [],
+        "num_images_sent": row.get("num_images_sent"),
         "prompt_profile": row.get("prompt_profile")
         or generation_cfg.get("prompt_profile")
         or config.get("prompt_profile"),
@@ -261,6 +529,14 @@ def normalize_prediction_row(row: dict[str, Any], config: dict[str, Any]) -> dic
         "fallback_used": row.get("fallback_used"),
         "prompt_style": generation_cfg.get("prompt_style", "concise"),
         "retrieval_mode": retrieval_cfg.get("mode", "colpali_colvision_multivector"),
+        "retriever_backend": row.get("retriever_backend") or retrieval_cfg.get("backend"),
+        "colpali_used": (
+            row.get("colpali_used")
+            if row.get("colpali_used") is not None
+            else retrieval_cfg.get("backend", "colvision") == "colvision"
+        ),
+        "top30_retrieved_pages": row.get("top30_retrieved_pages") or retrieved_pages[:30],
+        "retrieval_scores": row.get("retrieval_scores") or [],
         "reranker_mode": rerank_cfg.get("mode", "nemotron_vl_cross_encoder"),
         "crop_policy": crop_cfg.get("crop_policy") or crop_cfg.get("visual_crop_policy"),
         "context_mode": row.get("context_mode")
@@ -396,6 +672,10 @@ def append_footer(
 def main() -> None:
     args = parse_args()
     config = load_config(args.config)
+    if args.limit is not None:
+        config.setdefault("evaluation", {})["limit"] = args.limit
+    if args.types:
+        config.setdefault("dataset", {})["types"] = _as_list(args.types, [])
     experiment_name = str(config.get("experiment_name") or args.config.stem)
     output_cfg = config.get("output", {})
     results_dir = Path(
@@ -414,9 +694,12 @@ def main() -> None:
     log_path.write_text(log_header(args.config, results_dir, config, command), encoding="utf-8")
 
     with log_path.open("a", encoding="utf-8") as log:
+        child_env = dict(os.environ)
+        child_env["PYTHONUNBUFFERED"] = "1"
         process = subprocess.Popen(
             command,
             cwd=ROOT,
+            env=child_env,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,

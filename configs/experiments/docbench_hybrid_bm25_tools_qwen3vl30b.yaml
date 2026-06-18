@@ -1,0 +1,64 @@
+experiment_name: docbench_hybrid_bm25_tools_qwen3vl30b
+results_root: results
+seed: 42
+prompt_profile: docbench_hybrid_v1
+
+dataset:
+  name: docbench
+  split: multimodal_308
+  subset: multimodal-t,multimodal-f
+  types: ["multimodal-t", "multimodal-f"]
+  data_dir: data/datasets/docbench
+
+evaluation:
+  evaluator: full_pipeline
+  adaptive_policy: text_top3_visual_top5
+  text_top_pages: 3
+  visual_top_pages: 5
+
+retrieval:
+  mode: colpali_colvision_multivector
+  model_id: vidore/colpali-v1.3-merged
+  index_dir: index_colpali_v1_3_merged
+  index_name: pages_colpali_v1_3_merged_clean
+  device: cuda
+  score_batch_size: 32
+  first_stage_top_k: 30
+
+reranking:
+  mode: nemotron_vl_cross_encoder
+  model_id: nvidia/llama-nemotron-rerank-vl-1b-v2
+  top_k: 10
+  device: cuda
+  batch_size: 2
+  max_input_tiles: 6
+  max_length: 2048
+
+generation:
+  model_id: openai/qwen3-vl-30b
+  prompt_style: concise
+  prompt_profile: docbench_hybrid_v1
+  multimodal_generation_backend: openai_compatible_vlm
+  max_new_tokens: 192
+  max_context_images: 5
+  max_image_long_edge: 1600
+  do_sample: false
+  no_4bit: false
+  answer_refine: none
+  openai_vlm:
+    base_url: "http://10.32.15.88:4000/v1"
+    model: "openai/qwen3-vl-30b"
+    api_key_env: "OPENAI_COMPAT_API_KEY"
+    temperature: 0
+    max_tokens: 192
+    timeout: 180
+
+cropping:
+  crop_policy: layout_aware_v2
+  visual_crop_policy: layout_aware_v2
+  context_mode: full_page_plus_crop
+  layout_context_mode: full_page_plus_crop
+  debug_crop_dir: data/debug_crops/docbench_hybrid_bm25_tools_qwen3vl30b
+
+output:
+  directory: results/docbench_hybrid_bm25_tools_qwen3vl30b

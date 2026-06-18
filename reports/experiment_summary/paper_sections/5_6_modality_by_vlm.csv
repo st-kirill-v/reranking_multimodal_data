@@ -1,0 +1,3 @@
+﻿vlm,count_experiments,mean_mm_t_f1,mean_mm_f_f1,mean_mm_gap,best_mmf_experiment
+Qwen3-VL-30B,18,0.6247,0.5643,0.0604,multimodal_308_nemotron_image_retriever_with_reranker_qwen3vl30b
+Qwen3-VL-8B,2,0.6151,0.5319,0.0832,multimodal_308_with_reranker

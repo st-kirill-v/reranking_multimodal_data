@@ -1,0 +1,50 @@
+experiment_name: text_reranker_308_no_reranker_qwen3vl30b
+results_root: results
+seed: 42
+
+dataset:
+  name: docbench
+  split: multimodal_308
+  subset: multimodal-t,multimodal-f
+  types: ["multimodal-t", "multimodal-f"]
+  data_dir: data/datasets/docbench
+
+evaluation:
+  evaluator: text_reranker_308
+  text_top_pages: 5
+
+retrieval:
+  mode: text_page_bm25
+  backend: text_page_bm25
+  first_stage_top_k: 30
+
+reranking:
+  mode: none
+  backend: none
+  model_id: none
+  device: cuda
+  top_k: 10
+  batch_size: 1
+  max_length: 512
+  trust_remote_code: false
+
+text_pipeline:
+  source_fields: ["page_text"]
+  context_top_pages: 5
+  text_context_max_chars: 32000
+
+generation:
+  model_id: openai/qwen3-vl-30b
+  prompt_profile: docbench_hybrid_v1
+  multimodal_generation_backend: openai_compatible_vlm
+  max_new_tokens: 192
+  openai_vlm:
+    base_url: "http://10.32.15.88:4000/v1"
+    model: "openai/qwen3-vl-30b"
+    api_key_env: "OPENAI_COMPAT_API_KEY"
+    temperature: 0
+    max_tokens: 192
+    timeout: 180
+
+output:
+  directory: results/text_reranker_308_no_reranker_qwen3vl30b

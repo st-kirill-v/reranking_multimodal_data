@@ -1,0 +1,6 @@
+﻿retriever,count_experiments,mean_mean_f1,max_mean_f1,mean_f1_gt_0_5,mean_latency,best_experiment
+Nemotron image,7,0.6791,0.7023,0.7189,7.9438,image_text_full_308_nemotron_qwen3vl30b
+ColPali/ColVision,5,0.6402,0.6860,0.6643,11.5951,docbench_hybrid_bm25_tools_qwen3vl30b
+BM25 page_text,5,0.5328,0.5497,0.5500,0.8929,text_reranker_308_bge_large_qwen3vl30b
+BGE-base text encoder,1,0.5205,0.5205,0.5390,1.4988,text_evidence_encoder_308_bge_base_en_v1_5_bge_reranker_large_qwen3vl30b
+BGE-large text encoder,2,0.4889,0.5354,0.4968,1.2528,text_evidence_encoder_308_bge_large_en_v1_5_bge_reranker_large_qwen3vl30b

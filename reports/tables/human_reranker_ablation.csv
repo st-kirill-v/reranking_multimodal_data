@@ -1,0 +1,8 @@
+﻿Comparison,No reranker,With reranker,Mean F1 no,Mean F1 with,Delta F1,Latency no,Latency with,Delta latency,Verdict
+ColPali Qwen8B VL reranker,ColPali no reranker + Qwen8B,ColPali + VL reranker + Qwen8B,0.5657,0.6170,0.0513,9.9253,15.2920,5.3667,"Quality improves, latency increases"
+ColPali Qwen30B VL reranker,ColPali no reranker + Qwen30B,ColPali + VL reranker + Qwen30B,0.6539,0.6860,0.0321,6.0709,14.8791,8.8082,"Quality improves, latency increases"
+Nemotron image Qwen30B VL reranker,Nemotron image no reranker + Qwen30B,Nemotron image + VL reranker + Qwen30B,0.6479,0.6902,0.0423,2.5535,11.0702,8.5167,"Quality improves, latency increases"
+Nemotron fusion Qwen30B image reranker,Fusion Nemotron no image reranker + Qwen30B,Fusion Nemotron + VL reranker + Qwen30B,0.6575,0.6793,0.0219,2.5080,9.4122,6.9042,"Quality improves, latency increases"
+Nemotron full image+text Qwen30B text-image reranker,Nemotron full image+text no reranker + Qwen30B,Nemotron full image+text + VL reranker + Qwen30B,0.6784,0.7023,0.0240,3.4263,13.6441,10.2179,"Quality improves, latency increases"
+BM25 text BGE-large reranker,BM25 no reranker + Qwen30B,BM25 + BGE-reranker-large + Qwen30B,0.5144,0.5497,0.0353,0.7146,1.2344,0.5198,"Quality improves, latency increases"
+Text evidence BGE-large reranker,BGE-large encoder no reranker + Qwen30B,BGE-large encoder + BGE-large reranker + Qwen30B,0.4424,0.5354,0.0930,0.9953,1.5102,0.5149,"Quality improves, latency increases"

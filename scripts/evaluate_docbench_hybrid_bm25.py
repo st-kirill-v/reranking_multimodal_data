@@ -30,15 +30,12 @@ from src.cropping.layout_aware_eval import (  # noqa: E402
     summarize_with_crop_metrics,
     write_case_csv,
 )
-from src.pipelines.text_qa_pipeline import TextQAPipeline  # noqa: E402
-from src.retrieval.text_bm25_retriever import DocBenchBM25Retriever  # noqa: E402
-
 
 TEXT_TYPES = {"text-only", "meta-data", "unanswerable"}
 MULTIMODAL_TYPES = {"multimodal-t", "multimodal-f"}
 
 
-def create_hybrid_generator(args: argparse.Namespace) -> Any:
+def create_text_generator(args: argparse.Namespace) -> Any:
     if args.prompt_profile == "docbench_hybrid_v1":
         from src.generation.docbench_hybrid_generator import create_docbench_hybrid_generator
 
@@ -58,6 +55,22 @@ def create_hybrid_generator(args: argparse.Namespace) -> Any:
     return create_generator(args)
 
 
+def create_multimodal_generator(args: argparse.Namespace) -> Any:
+    if args.multimodal_generation_backend == "openai_compatible_vlm":
+        from src.generation.openai_compatible_vlm import create_openai_compatible_vlm
+
+        return create_openai_compatible_vlm(
+            base_url=args.openai_vlm_base_url,
+            model=args.openai_vlm_model,
+            api_key_env=args.openai_vlm_api_key_env,
+            api_key=args.openai_vlm_api_key,
+            temperature=args.openai_vlm_temperature,
+            max_tokens=args.openai_vlm_max_tokens or args.max_new_tokens,
+            timeout=args.openai_vlm_timeout,
+        )
+    return create_text_generator(args)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Hybrid DocBench evaluation: BM25 text pipeline + current multimodal pipeline."
@@ -69,6 +82,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--text-index-dir", type=Path, default=Path("data/indexes/docbench_bm25"))
     parser.add_argument("--text-top-k", type=int, default=5)
     parser.add_argument("--text-context-max-chars", type=int, default=12000)
+    parser.add_argument("--enable-text-tools", action="store_true")
 
     parser.add_argument("--index-dir", type=Path, default=Path("index_colpali_v1_3_merged"))
     parser.add_argument("--index-name", default="pages_colpali_v1_3_merged_clean")
@@ -95,6 +109,18 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--answer-refine", choices=["none", "text"], default="none")
     parser.add_argument("--prompt-profile", default="legacy")
+    parser.add_argument(
+        "--multimodal-generation-backend",
+        choices=["local_vlm", "openai_compatible_vlm"],
+        default="local_vlm",
+    )
+    parser.add_argument("--openai-vlm-base-url", default="")
+    parser.add_argument("--openai-vlm-model", default="openai/qwen3-vl-30b")
+    parser.add_argument("--openai-vlm-api-key-env", default="OPENAI_COMPAT_API_KEY")
+    parser.add_argument("--openai-vlm-api-key", default=None)
+    parser.add_argument("--openai-vlm-temperature", type=float, default=0.0)
+    parser.add_argument("--openai-vlm-max-tokens", type=int, default=0)
+    parser.add_argument("--openai-vlm-timeout", type=float, default=180.0)
 
     parser.add_argument("--top-pages", type=int, default=5)
     parser.add_argument(
@@ -209,24 +235,85 @@ def text_page_labels(results: list[dict[str, Any]]) -> list[str]:
     return [f"{row.get('doc_id')}/{row.get('page')}" for row in results]
 
 
+def ordered_context_image_paths(
+    context_candidate_rows: list[dict[str, Any]],
+    selected_crop: dict[str, Any] | None,
+    layout_context_mode: str,
+) -> list[str | None]:
+    full_page_paths = [
+        str(row.get("path")) if row.get("path") else None for row in context_candidate_rows
+    ]
+    if not selected_crop or not selected_crop.get("crop_path"):
+        return full_page_paths
+    if layout_context_mode != "full_page_plus_crop":
+        return [str(selected_crop.get("crop_path"))]
+
+    selected_label = selected_crop.get("page_label")
+    selected_idx = 0
+    if selected_label:
+        for idx, row in enumerate(context_candidate_rows):
+            if f"{row.get('folder')}/{row.get('page')}" == selected_label:
+                selected_idx = idx
+                break
+    selected_page = full_page_paths[selected_idx] if full_page_paths else None
+    remaining = [path for idx, path in enumerate(full_page_paths) if idx != selected_idx]
+    return [selected_page, str(selected_crop.get("crop_path")), *remaining]
+
+
 def run_text_question(
     args: argparse.Namespace,
-    text_pipeline: TextQAPipeline,
+    text_pipeline: Any,
     row: dict[str, Any],
 ) -> dict[str, Any]:
+    from src.pipelines.metadata_tools import normalize_text_route_answer, run_metadata_tool
+
     question = row["question"]
     expected = row.get("answer") or ""
     total_start = time.time()
     expected_folder = row.get("expected_folder")
-    qa_result = text_pipeline.answer(
-        question,
-        doc_id=expected_folder,
-        question_type=row.get("type", "text-only"),
-        context_mode="text",
-    )
+    question_type = row.get("type", "text-only")
+    route_subtype = "bm25"
+    tool_used = None
+    metadata_tool = None
+    if args.enable_text_tools:
+        metadata_tool = run_metadata_tool(
+            question=question,
+            question_type=question_type,
+            data_dir=args.data_dir,
+            doc_id=str(expected_folder),
+            context_max_chars=args.text_context_max_chars,
+        )
+
+    if metadata_tool and metadata_tool.answer is not None:
+
+        class ToolOnlyResult:
+            answer = metadata_tool.answer
+            retrieved_text_pages: list[dict[str, Any]] = []
+            context = metadata_tool.context
+            prompt_profile = None
+            prompt_name = None
+            latency_retrieval = 0.0
+            latency_generation = 0.0
+
+        qa_result = ToolOnlyResult()
+        route_subtype = metadata_tool.route_subtype
+        tool_used = metadata_tool.tool_used
+    else:
+        pages_override = metadata_tool.pages if metadata_tool else None
+        qa_result = text_pipeline.answer(
+            question,
+            doc_id=expected_folder,
+            question_type=question_type,
+            context_mode="text",
+            pages_override=pages_override,
+        )
+        if metadata_tool:
+            route_subtype = metadata_tool.route_subtype
+            tool_used = metadata_tool.tool_used
     latency = time.time() - total_start
 
-    answer = qa_result.answer
+    raw_answer = str(qa_result.answer).strip()
+    answer = normalize_text_route_answer(raw_answer) if args.enable_text_tools else raw_answer
     exact, f1 = compute_similarity(answer, expected)
     extended_metrics = compute_extended_metrics(answer, expected)
     retrieved_pages = qa_result.retrieved_text_pages
@@ -235,7 +322,13 @@ def run_text_question(
         "question": question,
         "expected": expected,
         "generated": answer,
-        "raw_generated": getattr(text_pipeline.generator, "last_raw_output", answer),
+        "raw_generated": (
+            raw_answer
+            if tool_used
+            else getattr(text_pipeline.generator, "last_raw_output", raw_answer)
+        ),
+        "raw_generated_answer": raw_answer,
+        "normalized_answer": answer,
         "vlm_think": getattr(text_pipeline.generator, "last_reasoning", ""),
         "exact": exact,
         "f1": f1,
@@ -245,11 +338,19 @@ def run_text_question(
         "context_latency": 0.0,
         "vlm_latency": qa_result.latency_generation,
         "latency_generation": qa_result.latency_generation,
+        "generation_backend": getattr(text_pipeline.generator, "generation_backend", "local_vlm"),
+        "model_name": getattr(text_pipeline.generator, "model", "Qwen/Qwen3-VL-8B-Instruct"),
+        "image_paths_sent": [],
+        "num_images_sent": 0,
+        "postprocessed_answer": answer,
         "type": row.get("type", ""),
         "original_type": row.get("type", ""),
         "pipeline_used": "text_bm25",
-        "prompt_profile": qa_result.prompt_profile,
-        "prompt_name": qa_result.prompt_name,
+        "route_subtype": route_subtype,
+        "tool_used": tool_used,
+        "prompt_profile": qa_result.prompt_profile or args.prompt_profile,
+        "prompt_name": qa_result.prompt_name
+        or ("DETERMINISTIC_METADATA_TOOL" if tool_used else None),
         "context_mode": "text",
         "expected_folder": row.get("expected_folder"),
         "text_doc_scope": expected_folder,
@@ -312,17 +413,23 @@ def run_multimodal_question(
         layout_context_mode=args.layout_context_mode,
     )
     context_latency = time.time() - context_start
+    image_paths_sent = ordered_context_image_paths(
+        context_candidate_rows, selected_crop, args.layout_context_mode
+    )
 
     vlm_start = time.time()
     try:
         if hasattr(generator, "generate_answer_for_type"):
-            answer = generator.generate_answer_for_type(
-                query=question,
-                question_type=row.get("type", "multimodal-t"),
-                context_mode=args.layout_context_mode,
-                context_images=images,
-                context_text=None,
-            )
+            generation_kwargs = {
+                "query": question,
+                "question_type": row.get("type", "multimodal-t"),
+                "context_mode": args.layout_context_mode,
+                "context_images": images,
+                "context_text": None,
+            }
+            if getattr(generator, "generation_backend", None) == "openai_compatible_vlm":
+                generation_kwargs["image_paths"] = image_paths_sent
+            answer = generator.generate_answer_for_type(**generation_kwargs)
         else:
             answer = generator.generate_answer(question, images)
     except Exception as exc:  # noqa: BLE001 - keep one failed sample from killing the run.
@@ -366,6 +473,8 @@ def run_multimodal_question(
         "expected": expected,
         "generated": answer,
         "raw_generated": getattr(generator, "last_raw_output", answer),
+        "raw_generated_answer": getattr(generator, "last_raw_output", answer),
+        "postprocessed_answer": answer,
         "vlm_think": getattr(generator, "last_reasoning", ""),
         "exact": exact,
         "f1": f1,
@@ -374,7 +483,16 @@ def run_multimodal_question(
         "rerank_latency": rerank_latency,
         "context_latency": context_latency,
         "vlm_latency": vlm_latency,
-        "latency_generation": vlm_latency,
+        "latency_generation": getattr(generator, "last_latency_generation", vlm_latency),
+        "generation_backend": getattr(generator, "generation_backend", "local_vlm"),
+        "model_name": (
+            getattr(generator, "model", None)
+            if getattr(generator, "generation_backend", None) == "openai_compatible_vlm"
+            else "Qwen/Qwen3-VL-8B-Instruct"
+        ),
+        "image_paths_sent": getattr(generator, "last_image_paths_sent", image_paths_sent),
+        "num_images_sent": getattr(generator, "last_num_images_sent", len(images)),
+        "generation_error": getattr(generator, "last_error", None),
         "type": row.get("type", ""),
         "original_type": row.get("type", ""),
         "pipeline_used": "multimodal",
@@ -447,11 +565,18 @@ def main() -> None:
                 "text_index_dir": str(args.text_index_dir),
                 "text_top_k": args.text_top_k,
                 "text_context_max_chars": args.text_context_max_chars,
+                "enable_text_tools": args.enable_text_tools,
                 "multimodal_retrieval": "colvision_multi_vector",
                 "visual_crop_policy": args.visual_crop_policy,
                 "layout_context_mode": args.layout_context_mode,
                 "prompt_style": args.prompt_style,
                 "prompt_profile": args.prompt_profile,
+                "multimodal_generation_backend": args.multimodal_generation_backend,
+                "openai_vlm_model": (
+                    args.openai_vlm_model
+                    if args.multimodal_generation_backend == "openai_compatible_vlm"
+                    else None
+                ),
                 "dry_run": args.dry_run,
             },
             indent=2,
@@ -461,21 +586,28 @@ def main() -> None:
     if args.dry_run:
         return
 
-    generator = create_hybrid_generator(args)
-    text_retriever = DocBenchBM25Retriever(args.text_index_dir)
-    text_pipeline = TextQAPipeline(
-        retriever=text_retriever,
-        generator=generator,
-        top_k=args.text_top_k,
-        context_max_chars=args.text_context_max_chars,
-    )
+    text_pipeline = None
+    if text_rows:
+        from src.pipelines.text_qa_pipeline import TextQAPipeline
+        from src.retrieval.text_bm25_retriever import DocBenchBM25Retriever
+
+        text_generator = create_text_generator(args)
+        text_retriever = DocBenchBM25Retriever(args.text_index_dir)
+        text_pipeline = TextQAPipeline(
+            retriever=text_retriever,
+            generator=text_generator,
+            top_k=args.text_top_k,
+            context_max_chars=args.text_context_max_chars,
+        )
 
     multimodal_retriever = None
     reranker = None
+    multimodal_generator = None
     if multimodal_rows:
         from src.mmrag.config import RerankerConfig
         from src.mmrag.rerank import NemotronVLReranker
 
+        multimodal_generator = create_multimodal_generator(args)
         multimodal_retriever = ColVisionRetriever(args)
         reranker = NemotronVLReranker(
             RerankerConfig(device=args.rerank_device, batch_size=args.rerank_batch_size)
@@ -491,6 +623,8 @@ def main() -> None:
         print(f"    original_type={question_type}")
 
         if question_type in TEXT_TYPES:
+            if text_pipeline is None:
+                raise RuntimeError("Text pipeline was not initialized")
             result = run_text_question(args, text_pipeline, row)
             text_hits = result.get("retrieved_text_pages", [])
             print(
@@ -503,17 +637,21 @@ def main() -> None:
                 f"prompt_name={result.get('prompt_name')}"
             )
             print(
+                f"    route_subtype={result.get('route_subtype')} "
+                f"tool_used={result.get('tool_used')}"
+            )
+            print(
                 "    bm25_top5="
                 f"{[f'{hit.get('doc_id')}/{hit.get('page')}:{float(hit.get('score', 0.0)):.3f}' for hit in text_hits[:5]]}"
             )
         elif question_type in MULTIMODAL_TYPES:
-            if multimodal_retriever is None or reranker is None:
+            if multimodal_retriever is None or reranker is None or multimodal_generator is None:
                 raise RuntimeError("Multimodal components were not initialized")
             result = run_multimodal_question(
                 args,
                 multimodal_retriever,
                 reranker,
-                generator,
+                multimodal_generator,
                 row,
                 display_idx,
             )

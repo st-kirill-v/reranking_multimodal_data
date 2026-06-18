@@ -1,0 +1,7 @@
+﻿reranker,count_experiments,mean_mean_f1,mean_latency,best_experiment
+Nemotron VL reranker,7,0.6787,12.7283,image_text_full_308_nemotron_qwen3vl30b
+None,7,0.5943,3.7420,image_text_full_308_nemotron_no_reranker_qwen3vl30b
+BGE-reranker-base,1,0.5429,0.8689,text_reranker_308_bge_base_qwen3vl30b
+BGE-reranker-large,3,0.5352,1.4145,text_reranker_308_bge_large_qwen3vl30b
+Jina reranker,1,0.5303,0.8927,text_reranker_308_jina_qwen3vl30b
+MiniLM reranker,1,0.5265,0.7538,text_reranker_308_minilm_qwen3vl30b

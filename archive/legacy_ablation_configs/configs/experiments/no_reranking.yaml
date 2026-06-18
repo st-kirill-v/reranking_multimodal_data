@@ -1,0 +1,18 @@
+experiment_name: no_reranking
+results_root: results/ablations
+dataset:
+  name: docbench
+  input_candidates: data/colpali_candidates_top100.json
+reranking:
+  mode: no_reranking
+evaluation:
+  evaluator: baseline
+  mode: colpali
+  adaptive_policy: text_top3_visual_top5
+  text_top_pages: 3
+  visual_top_pages: 5
+generation:
+  prompt_style: concise
+  no_4bit: false
+cropping:
+  visual_crop_policy: visual_main

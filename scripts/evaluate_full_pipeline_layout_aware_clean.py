@@ -34,6 +34,13 @@ from src.retrieval.colvision import (  # noqa: E402
 )
 from src.mmrag.dataset import load_docbench_questions  # noqa: E402
 from src.mmrag.schema import RetrievalCandidate  # noqa: E402
+from src.reranking.fusion import (  # noqa: E402
+    FusionWeights,
+    attach_text_evidence,
+    fuse_candidates,
+    load_text_evidence_map,
+)
+from src.reranking.text_reranker import create_text_reranker  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:
@@ -52,15 +59,68 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--index-dir", type=Path, default=Path("index_colpali_v1_3_merged"))
     parser.add_argument("--index-name", default="pages_colpali_v1_3_merged_clean")
+    parser.add_argument(
+        "--retriever-backend",
+        choices=["colvision", "nemotron_image"],
+        default="colvision",
+    )
     parser.add_argument("--retriever-model-id", default="vidore/colpali-v1.3-merged")
     parser.add_argument("--retrieval-device", default="cuda")
     parser.add_argument("--score-batch-size", type=int, default=1)
 
     parser.add_argument("--first-stage-top-k", type=int, default=30)
+    parser.add_argument(
+        "--reranker-mode",
+        choices=["nemotron", "nemotron_text_image", "none"],
+        default="nemotron",
+        help='Use Nemotron reranking or pass retrieved pages through unchanged with "none".',
+    )
     parser.add_argument("--rerank-top-k", type=int, default=10)
     parser.add_argument("--rerank-device", default="cuda")
     parser.add_argument("--rerank-batch-size", type=int, default=1)
+    parser.add_argument(
+        "--rerank-text-source-fields",
+        nargs="*",
+        default=["table_text", "caption", "page_text", "ocr"],
+        help="Text fields used only by --reranker-mode nemotron_text_image.",
+    )
+    parser.add_argument(
+        "--rerank-text-max-chars",
+        type=int,
+        default=4096,
+        help="Maximum extracted text characters per candidate for text+image reranking.",
+    )
     parser.add_argument("--neighbor-radius", type=int, default=0)
+
+    parser.add_argument(
+        "--fusion-mode",
+        choices=["none", "score_fusion"],
+        default="none",
+        help="Optional query-adaptive image+text score fusion after first-stage retrieval.",
+    )
+    parser.add_argument(
+        "--fusion-source-fields",
+        nargs="*",
+        default=["page_text", "caption", "table_text"],
+        help="Text evidence fields for fusion. OCR can be added after pages_ocr.json exists.",
+    )
+    parser.add_argument("--fusion-alpha", type=float, default=1.0)
+    parser.add_argument("--fusion-beta", type=float, default=0.2)
+    parser.add_argument("--fusion-gamma", type=float, default=1.0)
+    parser.add_argument("--fusion-lambda-number", type=float, default=0.05)
+    parser.add_argument("--fusion-lambda-keyword", type=float, default=0.05)
+    parser.add_argument("--fusion-lambda-exact-phrase", type=float, default=0.05)
+    parser.add_argument("--fusion-lambda-table-header", type=float, default=0.20)
+    parser.add_argument("--fusion-text-reranker-model-id", default="BAAI/bge-reranker-large")
+    parser.add_argument("--fusion-text-reranker-device", default="cuda")
+    parser.add_argument("--fusion-text-reranker-batch-size", type=int, default=4)
+    parser.add_argument("--fusion-text-reranker-max-length", type=int, default=512)
+    parser.add_argument(
+        "--fusion-text-reranker-backend",
+        choices=["cross_encoder", "lexical", "none"],
+        default="cross_encoder",
+    )
+    parser.add_argument("--fusion-no-trust-remote-code", action="store_true")
 
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--max-image-long-edge", type=int, default=1600)
@@ -74,6 +134,18 @@ def parse_args() -> argparse.Namespace:
         default="concise",
     )
     parser.add_argument("--answer-refine", choices=["none", "text"], default="none")
+    parser.add_argument(
+        "--multimodal-generation-backend",
+        choices=["local_vlm", "openai_compatible_vlm"],
+        default="local_vlm",
+    )
+    parser.add_argument("--openai-vlm-base-url", default="")
+    parser.add_argument("--openai-vlm-model", default="openai/qwen3-vl-30b")
+    parser.add_argument("--openai-vlm-api-key-env", default="OPENAI_COMPAT_API_KEY")
+    parser.add_argument("--openai-vlm-api-key", default=None)
+    parser.add_argument("--openai-vlm-temperature", type=float, default=0.0)
+    parser.add_argument("--openai-vlm-max-tokens", type=int, default=0)
+    parser.add_argument("--openai-vlm-timeout", type=float, default=180.0)
 
     parser.add_argument("--top-pages", type=int, default=5)
     parser.add_argument(
@@ -114,6 +186,24 @@ def parse_args() -> argparse.Namespace:
         default="full_page_plus_crop",
     )
     parser.add_argument(
+        "--vlm-text-context-mode",
+        choices=["none", "selected_pages"],
+        default="none",
+        help="Optionally send extracted text evidence together with page images to the VLM.",
+    )
+    parser.add_argument(
+        "--vlm-text-source-fields",
+        nargs="*",
+        default=["ocr", "page_text", "caption", "table_text"],
+        help="Text evidence fields used only when --vlm-text-context-mode is enabled.",
+    )
+    parser.add_argument(
+        "--vlm-text-max-chars",
+        type=int,
+        default=12000,
+        help="Maximum characters of text evidence sent to the VLM with images.",
+    )
+    parser.add_argument(
         "--debug-crop-dir",
         type=Path,
         default=Path("data/debug_crops/full_pipeline_layout_aware_v2"),
@@ -129,6 +219,107 @@ def parse_args() -> argparse.Namespace:
         default=Path("data/eval_full_pipeline_layout_aware_308.json"),
     )
     return parser.parse_args()
+
+
+def create_multimodal_generator(args: argparse.Namespace) -> Any:
+    if args.multimodal_generation_backend == "openai_compatible_vlm":
+        from src.generation.openai_compatible_vlm import create_openai_compatible_vlm
+
+        return create_openai_compatible_vlm(
+            base_url=args.openai_vlm_base_url,
+            model=args.openai_vlm_model,
+            api_key_env=args.openai_vlm_api_key_env,
+            api_key=args.openai_vlm_api_key,
+            temperature=args.openai_vlm_temperature,
+            max_tokens=args.openai_vlm_max_tokens or args.max_new_tokens,
+            timeout=args.openai_vlm_timeout,
+        )
+    return create_generator(args)
+
+
+def ordered_context_image_paths(
+    context_candidate_rows: list[dict[str, Any]],
+    selected_crop: dict[str, Any] | None,
+    layout_context_mode: str,
+) -> list[str | None]:
+    full_page_paths = [
+        str(row.get("path")) if row.get("path") else None for row in context_candidate_rows
+    ]
+    if not selected_crop or not selected_crop.get("crop_path"):
+        return full_page_paths
+    if layout_context_mode != "full_page_plus_crop":
+        return [str(selected_crop.get("crop_path"))]
+
+    selected_label = selected_crop.get("page_label")
+    selected_idx = 0
+    if selected_label:
+        for idx, row in enumerate(context_candidate_rows):
+            if f"{row.get('folder')}/{row.get('page')}" == selected_label:
+                selected_idx = idx
+                break
+    selected_page = full_page_paths[selected_idx] if full_page_paths else None
+    remaining = [path for idx, path in enumerate(full_page_paths) if idx != selected_idx]
+    return [selected_page, str(selected_crop.get("crop_path")), *remaining]
+
+
+def build_vlm_text_context(
+    candidates: list[RetrievalCandidate],
+    evidence_map: dict[tuple[str, int], dict[str, Any]],
+    *,
+    max_chars: int,
+) -> tuple[str, bool, list[dict[str, Any]]]:
+    if max_chars <= 0:
+        return "", False, []
+
+    blocks: list[str] = []
+    debug_rows: list[dict[str, Any]] = []
+    total_chars = 0
+    truncated = False
+    for rank, candidate in enumerate(candidates, start=1):
+        evidence = evidence_map.get((str(candidate.folder), int(candidate.page)), {})
+        text = str(evidence.get("text") or "").strip()
+        fields = list(evidence.get("available_source_fields") or [])
+        if not text:
+            debug_rows.append(
+                {
+                    "rank": rank,
+                    "doc_id": str(candidate.folder),
+                    "page": int(candidate.page),
+                    "chars": 0,
+                    "fields": fields,
+                    "included": False,
+                }
+            )
+            continue
+
+        header = (
+            f"[rank={rank} doc_id={candidate.folder} page={candidate.page} "
+            f"fields={','.join(fields) if fields else 'unknown'}]\n"
+        )
+        remaining = max_chars - total_chars - len(header)
+        if remaining <= 0:
+            truncated = True
+            break
+        block_text = text[:remaining]
+        if len(block_text) < len(text):
+            truncated = True
+        block = f"{header}{block_text}"
+        blocks.append(block)
+        total_chars += len(block) + 2
+        debug_rows.append(
+            {
+                "rank": rank,
+                "doc_id": str(candidate.folder),
+                "page": int(candidate.page),
+                "chars": len(block_text),
+                "fields": fields,
+                "included": True,
+            }
+        )
+        if truncated:
+            break
+
+    return "\n\n".join(blocks), truncated, debug_rows
 
 
 class ColVisionRetriever:
@@ -200,10 +391,34 @@ class ColVisionRetriever:
         return candidates
 
 
+def create_retriever(args: argparse.Namespace) -> Any:
+    if args.retriever_backend == "nemotron_image":
+        from src.retrieval.nemotron_image import NemotronImageRetriever
+
+        return NemotronImageRetriever(
+            index_dir=args.index_dir,
+            index_name=args.index_name,
+            model_id=args.retriever_model_id,
+            device=args.retrieval_device,
+        )
+    return ColVisionRetriever(args)
+
+
 def candidate_to_json(candidate: RetrievalCandidate, rank: int | None = None) -> dict[str, Any]:
     row = candidate.to_json()
     if rank is not None:
         row["rank"] = rank
+    dynamic_fields = [
+        "text_rerank_score",
+        "text_rerank_rank",
+        "fusion_score",
+        "fusion_rank",
+        "fusion_features",
+        "evidence_fields",
+    ]
+    for field in dynamic_fields:
+        if hasattr(candidate, field):
+            row[field] = getattr(candidate, field)
     return row
 
 
@@ -549,16 +764,46 @@ def main() -> None:
             {
                 "selected_questions": len(rows),
                 "data_dir": str(args.data_dir),
-                "retrieval": "colvision_multi_vector",
+                "retrieval": (
+                    "nemotron_image"
+                    if args.retriever_backend == "nemotron_image"
+                    else "colvision_multi_vector"
+                ),
+                "retriever_backend": args.retriever_backend,
+                "colpali_used": args.retriever_backend == "colvision",
                 "index_name": args.index_name,
                 "index_dir": str(args.index_dir),
                 "retriever_model_id": args.retriever_model_id,
                 "first_stage_top_k": args.first_stage_top_k,
+                "reranker_mode": args.reranker_mode,
                 "rerank_top_k": args.rerank_top_k,
+                "rerank_text_source_fields": (
+                    args.rerank_text_source_fields
+                    if args.reranker_mode == "nemotron_text_image"
+                    else []
+                ),
+                "rerank_text_max_chars": (
+                    args.rerank_text_max_chars if args.reranker_mode == "nemotron_text_image" else 0
+                ),
+                "fusion_mode": args.fusion_mode,
+                "fusion_source_fields": args.fusion_source_fields,
                 "adaptive_policy": args.adaptive_policy,
                 "visual_crop_policy": args.visual_crop_policy,
                 "layout_context_mode": args.layout_context_mode,
                 "prompt_style": args.prompt_style,
+                "multimodal_generation_backend": args.multimodal_generation_backend,
+                "openai_vlm_model": (
+                    args.openai_vlm_model
+                    if args.multimodal_generation_backend == "openai_compatible_vlm"
+                    else None
+                ),
+                "vlm_text_context_mode": args.vlm_text_context_mode,
+                "vlm_text_source_fields": (
+                    args.vlm_text_source_fields if args.vlm_text_context_mode != "none" else []
+                ),
+                "vlm_text_max_chars": (
+                    args.vlm_text_max_chars if args.vlm_text_context_mode != "none" else 0
+                ),
                 "dry_run": args.dry_run,
             },
             indent=2,
@@ -568,14 +813,78 @@ def main() -> None:
     if args.dry_run:
         return
 
-    from src.mmrag.rerank import NemotronVLReranker
-    from src.mmrag.config import RerankerConfig
+    retriever = create_retriever(args)
+    reranker = None
+    if args.reranker_mode == "nemotron":
+        from src.mmrag.rerank import NemotronVLReranker
+        from src.mmrag.config import RerankerConfig
 
-    retriever = ColVisionRetriever(args)
-    reranker = NemotronVLReranker(
-        RerankerConfig(device=args.rerank_device, batch_size=args.rerank_batch_size)
+        reranker = NemotronVLReranker(
+            RerankerConfig(device=args.rerank_device, batch_size=args.rerank_batch_size)
+        )
+    elif args.reranker_mode == "nemotron_text_image":
+        from src.mmrag.rerank import NemotronVLTextImageReranker
+        from src.mmrag.config import RerankerConfig
+
+        print(
+            "[Reranker Text+Image] Loading text evidence fields="
+            f"{args.rerank_text_source_fields} from {args.data_dir}"
+        )
+        rerank_text_evidence_map = load_text_evidence_map(
+            args.data_dir,
+            source_fields=args.rerank_text_source_fields,
+        )
+        print(
+            "[Reranker Text+Image] Loaded text evidence pages: "
+            f"{len(rerank_text_evidence_map)} max_chars={args.rerank_text_max_chars}"
+        )
+        reranker = NemotronVLTextImageReranker(
+            RerankerConfig(device=args.rerank_device, batch_size=args.rerank_batch_size),
+            evidence_map=rerank_text_evidence_map,
+            max_text_chars=args.rerank_text_max_chars,
+        )
+    fusion_text_reranker = None
+    fusion_evidence_map: dict[tuple[str, int], dict[str, Any]] = {}
+    vlm_text_evidence_map: dict[tuple[str, int], dict[str, Any]] = {}
+    fusion_weights = FusionWeights(
+        alpha=args.fusion_alpha,
+        beta=args.fusion_beta,
+        gamma=args.fusion_gamma,
+        lambda_number=args.fusion_lambda_number,
+        lambda_keyword=args.fusion_lambda_keyword,
+        lambda_exact_phrase=args.fusion_lambda_exact_phrase,
+        lambda_table_header=args.fusion_lambda_table_header,
     )
-    generator = create_generator(args)
+    if args.fusion_mode == "score_fusion":
+        print(
+            "[Fusion] Loading text evidence fields="
+            f"{args.fusion_source_fields} from {args.data_dir}"
+        )
+        fusion_evidence_map = load_text_evidence_map(
+            args.data_dir,
+            source_fields=args.fusion_source_fields,
+        )
+        print(f"[Fusion] Loaded text evidence pages: {len(fusion_evidence_map)}")
+        if args.fusion_text_reranker_backend != "none":
+            fusion_text_reranker = create_text_reranker(
+                args.fusion_text_reranker_model_id,
+                device=args.fusion_text_reranker_device,
+                batch_size=args.fusion_text_reranker_batch_size,
+                max_length=args.fusion_text_reranker_max_length,
+                trust_remote_code=not args.fusion_no_trust_remote_code,
+                backend=args.fusion_text_reranker_backend,
+            )
+    if args.vlm_text_context_mode != "none":
+        print(
+            "[VLM Text Context] Loading text evidence fields="
+            f"{args.vlm_text_source_fields} from {args.data_dir}"
+        )
+        vlm_text_evidence_map = load_text_evidence_map(
+            args.data_dir,
+            source_fields=args.vlm_text_source_fields,
+        )
+        print(f"[VLM Text Context] Loaded text evidence pages: {len(vlm_text_evidence_map)}")
+    generator = create_multimodal_generator(args)
 
     results: list[dict[str, Any]] = []
     debug_rows: list[dict[str, Any]] = []
@@ -590,7 +899,36 @@ def main() -> None:
         retrieval_latency = time.time() - retrieval_start
 
         rerank_start = time.time()
-        reranked = reranker.rerank(question, retrieved)[: args.rerank_top_k]
+        image_rerank_latency = 0.0
+        text_rerank_latency = 0.0
+        fusion_latency = 0.0
+        fusion_enabled = args.fusion_mode == "score_fusion"
+        if fusion_enabled:
+            attach_text_evidence(retrieved, fusion_evidence_map)
+            image_rerank_start = time.time()
+            if reranker is None:
+                image_scored = retrieved[:]
+            else:
+                image_scored = reranker.rerank(question, retrieved)
+            image_rerank_latency = time.time() - image_rerank_start
+
+            text_rerank_start = time.time()
+            if fusion_text_reranker is None:
+                text_scored = image_scored
+            else:
+                text_output = fusion_text_reranker.rerank(question, image_scored)
+                text_scored = text_output.candidates
+            text_rerank_latency = time.time() - text_rerank_start
+
+            fusion_start = time.time()
+            reranked = fuse_candidates(question, text_scored, weights=fusion_weights)[
+                : args.rerank_top_k
+            ]
+            fusion_latency = time.time() - fusion_start
+        elif reranker is None:
+            reranked = retrieved[: args.rerank_top_k]
+        else:
+            reranked = reranker.rerank(question, retrieved)[: args.rerank_top_k]
         rerank_latency = time.time() - rerank_start
 
         effective_top_pages, effective_crop_policy, visual_context = (
@@ -618,6 +956,18 @@ def main() -> None:
             layout_context_mode=args.layout_context_mode,
         )
         context_latency = time.time() - context_start
+        image_paths_sent = ordered_context_image_paths(
+            context_candidate_rows, selected_crop, args.layout_context_mode
+        )
+        vlm_text_context = ""
+        vlm_text_truncated = False
+        vlm_text_debug: list[dict[str, Any]] = []
+        if args.vlm_text_context_mode == "selected_pages":
+            vlm_text_context, vlm_text_truncated, vlm_text_debug = build_vlm_text_context(
+                context_candidates,
+                vlm_text_evidence_map,
+                max_chars=args.vlm_text_max_chars,
+            )
 
         print(f"\n[{display_idx}/{args.start + len(rows)}] {question[:100]}")
         print(
@@ -628,10 +978,30 @@ def main() -> None:
             "    reranked_top5="
             f"{[f'{candidate.folder}/{candidate.page}' for candidate in reranked[:5]]}"
         )
+        if args.reranker_mode == "nemotron_text_image":
+            print(
+                "    rerank_text_chars_top5="
+                f"{[int(getattr(candidate, 'rerank_text_chars', 0) or 0) for candidate in reranked[:5]]}"
+            )
+        if fusion_enabled:
+            print(
+                "    fusion_top5="
+                f"{[f'{candidate.folder}/{candidate.page}:{getattr(candidate, 'fusion_score', 0.0):.3f}' for candidate in reranked[:5]]}"
+            )
+            print(
+                f"    fusion_latency image={image_rerank_latency:.2f}s "
+                f"text={text_rerank_latency:.2f}s fusion={fusion_latency:.2f}s"
+            )
         print(
             f"    context=top{effective_top_pages} crop={effective_crop_policy} "
             f"mode={args.layout_context_mode} visual={visual_context}"
         )
+        if args.vlm_text_context_mode != "none":
+            print(
+                "    vlm_text_context="
+                f"mode={args.vlm_text_context_mode} chars={len(vlm_text_context)} "
+                f"truncated={vlm_text_truncated}"
+            )
         if selected_crop:
             crop_score = selected_crop.get("crop_score")
             crop_score_text = f"{crop_score:.3f}" if isinstance(crop_score, int | float) else "None"
@@ -644,7 +1014,15 @@ def main() -> None:
 
         vlm_start = time.time()
         try:
-            answer = generator.generate_answer(question, images)
+            if getattr(generator, "generation_backend", None) == "openai_compatible_vlm":
+                answer = generator.generate_answer(
+                    question,
+                    images,
+                    context_text=vlm_text_context or None,
+                    image_paths=image_paths_sent,
+                )
+            else:
+                answer = generator.generate_answer(question, images)
         except Exception as exc:
             print(f"    [ERROR] VLM failed: {exc}")
             generator.last_raw_output = ""
@@ -686,14 +1064,36 @@ def main() -> None:
             "expected": expected,
             "generated": answer,
             "raw_generated": getattr(generator, "last_raw_output", answer),
+            "raw_generated_answer": getattr(generator, "last_raw_output", answer),
+            "postprocessed_answer": answer,
             "vlm_think": getattr(generator, "last_reasoning", ""),
             "exact": exact,
             "f1": f1,
             "latency": latency,
             "retrieval_latency": retrieval_latency,
             "rerank_latency": rerank_latency,
+            "image_rerank_latency": image_rerank_latency,
+            "text_rerank_latency": text_rerank_latency,
+            "fusion_latency": fusion_latency,
             "context_latency": context_latency,
             "vlm_latency": vlm_latency,
+            "latency_generation": getattr(generator, "last_latency_generation", vlm_latency),
+            "generation_backend": getattr(generator, "generation_backend", "local_vlm"),
+            "model_name": (
+                getattr(generator, "model", None)
+                if getattr(generator, "generation_backend", None) == "openai_compatible_vlm"
+                else "Qwen/Qwen3-VL-8B-Instruct"
+            ),
+            "image_paths_sent": getattr(generator, "last_image_paths_sent", image_paths_sent),
+            "num_images_sent": getattr(generator, "last_num_images_sent", len(images)),
+            "vlm_text_context_mode": args.vlm_text_context_mode,
+            "vlm_text_source_fields": (
+                args.vlm_text_source_fields if args.vlm_text_context_mode != "none" else []
+            ),
+            "vlm_text_context_chars": len(vlm_text_context),
+            "vlm_text_context_truncated": vlm_text_truncated,
+            "vlm_text_context_debug": vlm_text_debug,
+            "generation_error": getattr(generator, "last_error", None),
             "type": row.get("type", ""),
             "expected_folder": row.get("expected_folder"),
             "evidence": row.get("evidence", ""),
@@ -701,6 +1101,40 @@ def main() -> None:
             "effective_top_pages": effective_top_pages,
             "effective_crop_policy": effective_crop_policy,
             "visual_context": visual_context,
+            "reranker_mode": args.reranker_mode,
+            "rerank_text_source_fields": (
+                args.rerank_text_source_fields
+                if args.reranker_mode == "nemotron_text_image"
+                else []
+            ),
+            "rerank_text_max_chars": (
+                args.rerank_text_max_chars if args.reranker_mode == "nemotron_text_image" else 0
+            ),
+            "rerank_text_chars": (
+                [int(getattr(candidate, "rerank_text_chars", 0) or 0) for candidate in reranked]
+                if args.reranker_mode == "nemotron_text_image"
+                else []
+            ),
+            "fusion_mode": args.fusion_mode,
+            "fusion_weights": {
+                "alpha": args.fusion_alpha,
+                "beta": args.fusion_beta,
+                "gamma": args.fusion_gamma,
+                "lambda_number": args.fusion_lambda_number,
+                "lambda_keyword": args.fusion_lambda_keyword,
+                "lambda_exact_phrase": args.fusion_lambda_exact_phrase,
+                "lambda_table_header": args.fusion_lambda_table_header,
+            },
+            "fusion_source_fields": args.fusion_source_fields,
+            "fusion_text_reranker_model_id": (
+                args.fusion_text_reranker_model_id if fusion_enabled else None
+            ),
+            "retriever_backend": args.retriever_backend,
+            "colpali_used": args.retriever_backend == "colvision",
+            "retrieval_scores": [float(candidate.score) for candidate in retrieved],
+            "top30_retrieved_pages": [
+                f"{candidate.folder}/{candidate.page}" for candidate in retrieved[:30]
+            ],
             "retrieved_candidates": [
                 candidate_to_json(candidate, rank=rank)
                 for rank, candidate in enumerate(retrieved, start=1)

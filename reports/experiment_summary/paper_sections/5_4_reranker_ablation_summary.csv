@@ -1,0 +1,5 @@
+﻿metric,value,comparison
+mean_delta_f1,0.0428,all reranker ablations
+mean_delta_latency,5.8355,all reranker ablations
+max_delta_f1,0.0930,Text evidence BGE-large reranker
+max_delta_latency,10.2179,Nemotron full image+text Qwen30B text-image reranker

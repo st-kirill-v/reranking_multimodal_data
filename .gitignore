@@ -20,6 +20,8 @@ venv/
 .coverage.*
 htmlcov/
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
 *.egg-info/
 .eggs/
 
@@ -41,11 +43,25 @@ Thumbs.db
 *.log
 logs/
 
+# Archives
+*.zip
+*.7z
+*.rar
+*.tar
+*.tar.gz
+
 # Data files
 *.csv
 *.json
 *.parquet
+*.xls
+*.xlsx
 data/
+!reports/**/*.csv
+!reports/**/*.json
+!reports/**/*.md
+!reports/**/*.png
+!configs/**/*.json
 
 # Models
 *.pkl
@@ -54,7 +70,40 @@ models/
 
 hf_cache/
 index/
+index_colpali*/
 index_test/
 cache/
+archive/**/tool_caches/
+archive/debug_or_smoke_runs/**
+!archive/debug_or_smoke_runs/.gitkeep
+archive/old_results/**
+!archive/old_results/.gitkeep
+results/
+debug_crops/
 
 *custodian_ed25519
+
+# Local build artifacts
+*.egg-info/
+build/
+dist/
+
+# LaTeX build artifacts
+*.aux
+*.bbl
+*.bcf
+*.blg
+*.fdb_latexmk
+*.fls
+*.lof
+*.lot
+*.out
+*.run.xml
+*.synctex.gz
+*.toc
+
+# Large local model/index artifacts
+*.index
+*.faiss
+*.pt
+*.safetensors
