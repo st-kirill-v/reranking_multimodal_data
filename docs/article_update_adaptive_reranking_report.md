@@ -20,9 +20,9 @@
 
 | Figure | File |
 | --- | --- |
-| Answer quality comparison across reranking strategies | `reports/figures/reranking_quality_comparison.png` |
-| Adaptive reranking route distribution | `reports/figures/adaptive_route_distribution.png` |
-| Quality-latency trade-off | `reports/figures/quality_latency_tradeoff.png` |
+| Сравнение качества и задержки различных стратегий реранкинга | `reports/figures/reranking_quality_latency_scatter.png`, `reports/figures/reranking_quality_latency_scatter.svg` |
+| Влияние Adaptive Reranking на компромисс между качеством и задержкой | `reports/figures/adaptive_quality_latency_barchart.png`, `reports/figures/adaptive_quality_latency_barchart.svg` |
+| Сравнение качества ответа различных стратегий реранкинга | `reports/figures/reranking_mean_f1_barplot.png`, `reports/figures/reranking_mean_f1_barplot.svg` |
 
 Для воспроизводимости добавлен скрипт:
 

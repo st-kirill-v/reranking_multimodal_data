@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1100" viewBox="0 0 1800 1100">
+<rect width="1800" height="1100" fill="#ffffff"/>
+<text x="900" y="70" font-family="Arial" font-size="40" font-weight="700" fill="#1c2731" text-anchor="middle">Влияние Adaptive Reranking на компромисс между качеством и задержкой</text>
+<text x="455" y="160" font-family="Arial" font-size="30" font-weight="700" fill="#1c2731" text-anchor="middle">Mean F1</text>
+<line x1="150" y1="860" x2="760" y2="860" stroke="#1c2731" stroke-width="3"/>
+<line x1="150" y1="210" x2="150" y2="860" stroke="#1c2731" stroke-width="3"/>
+<rect x="285" y="252" width="150" height="608" fill="#007934"/>
+<text x="360" y="224" font-family="Arial" font-size="23" font-weight="700" fill="#1c2731" text-anchor="middle">0.7023</text>
+<text x="360" y="898" font-family="Arial" font-size="20" font-weight="400" fill="#1c2731" text-anchor="middle">Multimodal</text>
+<text x="360" y="921" font-family="Arial" font-size="20" font-weight="400" fill="#1c2731" text-anchor="middle">Reranker</text>
+<rect x="535" y="253" width="150" height="607" fill="#de7626"/>
+<text x="610" y="225" font-family="Arial" font-size="23" font-weight="700" fill="#1c2731" text-anchor="middle">0.7009</text>
+<text x="610" y="898" font-family="Arial" font-size="20" font-weight="400" fill="#1c2731" text-anchor="middle">Adaptive</text>
+<text x="610" y="921" font-family="Arial" font-size="20" font-weight="400" fill="#1c2731" text-anchor="middle">Reranking</text>
+<text x="1275" y="160" font-family="Arial" font-size="30" font-weight="700" fill="#1c2731" text-anchor="middle">Latency, seconds</text>
+<line x1="970" y1="860" x2="1580" y2="860" stroke="#1c2731" stroke-width="3"/>
+<line x1="970" y1="210" x2="970" y2="860" stroke="#1c2731" stroke-width="3"/>
+<rect x="1105" y="269" width="150" height="591" fill="#007934"/>
+<text x="1180" y="241" font-family="Arial" font-size="23" font-weight="700" fill="#1c2731" text-anchor="middle">13.6441s</text>
+<text x="1180" y="898" font-family="Arial" font-size="20" font-weight="400" fill="#1c2731" text-anchor="middle">Multimodal</text>
+<text x="1180" y="921" font-family="Arial" font-size="20" font-weight="400" fill="#1c2731" text-anchor="middle">Reranker</text>
+<rect x="1355" y="436" width="150" height="424" fill="#de7626"/>
+<text x="1430" y="408" font-family="Arial" font-size="23" font-weight="700" fill="#1c2731" text-anchor="middle">9.7882s</text>
+<text x="1430" y="898" font-family="Arial" font-size="20" font-weight="400" fill="#1c2731" text-anchor="middle">Adaptive</text>
+<text x="1430" y="921" font-family="Arial" font-size="20" font-weight="400" fill="#1c2731" text-anchor="middle">Reranking</text>
+</svg>

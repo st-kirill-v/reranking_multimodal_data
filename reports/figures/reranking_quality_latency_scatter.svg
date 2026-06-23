@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1150" viewBox="0 0 1800 1150">
+<rect width="1800" height="1150" fill="#ffffff"/>
+<text x="900" y="70" font-family="Arial" font-size="40" font-weight="700" fill="#1c2731" text-anchor="middle">Сравнение качества и задержки различных стратегий реранкинга</text>
+<text x="900" y="122" font-family="Arial" font-size="26" font-weight="400" fill="#5b6977" text-anchor="middle">Средняя задержка (секунды) / Mean F1</text>
+<line x1="190" y1="190" x2="190" y2="950" stroke="#e9eef1" stroke-width="2"/>
+<line x1="190" y1="950" x2="190" y2="962" stroke="#5b6977" stroke-width="2"/>
+<text x="190" y="998" font-family="Arial" font-size="22" font-weight="400" fill="#5b6977" text-anchor="middle">0</text>
+<line x1="650" y1="190" x2="650" y2="950" stroke="#e9eef1" stroke-width="2"/>
+<line x1="650" y1="950" x2="650" y2="962" stroke="#5b6977" stroke-width="2"/>
+<text x="650" y="998" font-family="Arial" font-size="22" font-weight="400" fill="#5b6977" text-anchor="middle">5</text>
+<line x1="1110" y1="190" x2="1110" y2="950" stroke="#e9eef1" stroke-width="2"/>
+<line x1="1110" y1="950" x2="1110" y2="962" stroke="#5b6977" stroke-width="2"/>
+<text x="1110" y="998" font-family="Arial" font-size="22" font-weight="400" fill="#5b6977" text-anchor="middle">10</text>
+<line x1="1570" y1="190" x2="1570" y2="950" stroke="#e9eef1" stroke-width="2"/>
+<line x1="1570" y1="950" x2="1570" y2="962" stroke="#5b6977" stroke-width="2"/>
+<text x="1570" y="998" font-family="Arial" font-size="22" font-weight="400" fill="#5b6977" text-anchor="middle">15</text>
+<line x1="190" y1="950" x2="1570" y2="950" stroke="#e9eef1" stroke-width="2"/>
+<line x1="178" y1="950" x2="190" y2="950" stroke="#5b6977" stroke-width="2"/>
+<text x="145" y="957" font-family="Arial" font-size="22" font-weight="400" fill="#5b6977" text-anchor="middle">0.50</text>
+<line x1="190" y1="785" x2="1570" y2="785" stroke="#e9eef1" stroke-width="2"/>
+<line x1="178" y1="785" x2="190" y2="785" stroke="#5b6977" stroke-width="2"/>
+<text x="145" y="792" font-family="Arial" font-size="22" font-weight="400" fill="#5b6977" text-anchor="middle">0.55</text>
+<line x1="190" y1="620" x2="1570" y2="620" stroke="#e9eef1" stroke-width="2"/>
+<line x1="178" y1="620" x2="190" y2="620" stroke="#5b6977" stroke-width="2"/>
+<text x="145" y="627" font-family="Arial" font-size="22" font-weight="400" fill="#5b6977" text-anchor="middle">0.60</text>
+<line x1="190" y1="455" x2="1570" y2="455" stroke="#e9eef1" stroke-width="2"/>
+<line x1="178" y1="455" x2="190" y2="455" stroke="#5b6977" stroke-width="2"/>
+<text x="145" y="462" font-family="Arial" font-size="22" font-weight="400" fill="#5b6977" text-anchor="middle">0.65</text>
+<line x1="190" y1="290" x2="1570" y2="290" stroke="#e9eef1" stroke-width="2"/>
+<line x1="178" y1="290" x2="190" y2="290" stroke="#5b6977" stroke-width="2"/>
+<text x="145" y="297" font-family="Arial" font-size="22" font-weight="400" fill="#5b6977" text-anchor="middle">0.70</text>
+<line x1="190" y1="950" x2="1570" y2="950" stroke="#1c2731" stroke-width="3"/>
+<line x1="190" y1="190" x2="190" y2="950" stroke="#1c2731" stroke-width="3"/>
+<text x="880" y="1072" font-family="Arial" font-size="27" font-weight="700" fill="#1c2731" text-anchor="middle">Средняя задержка (секунды)</text>
+<text x="70" y="570" font-family="Arial" font-size="27" font-weight="700" fill="#1c2731" text-anchor="middle">Mean F1</text>
+<circle cx="303" cy="786" r="14" fill="#5b6977"/>
+<text x="328" y="786" font-family="Arial" font-size="25" font-weight="700" fill="#1c2731" text-anchor="start">Text Reranker</text>
+<circle cx="505" cy="361" r="14" fill="#1a569c"/>
+<text x="530" y="361" font-family="Arial" font-size="25" font-weight="700" fill="#1c2731" text-anchor="start">No Reranker</text>
+<circle cx="1090" cy="287" r="14" fill="#de7626"/>
+<text x="925" y="277" font-family="Arial" font-size="25" font-weight="700" fill="#1c2731" text-anchor="start">Adaptive Reranking</text>
+<circle cx="1445" cy="282" r="14" fill="#007934"/>
+<text x="1225" y="349" font-family="Arial" font-size="25" font-weight="700" fill="#1c2731" text-anchor="start">Multimodal Reranker</text>
+</svg>
