@@ -71,7 +71,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--first-stage-top-k", type=int, default=30)
     parser.add_argument(
         "--reranker-mode",
-        choices=["nemotron", "nemotron_text_image", "none"],
+        choices=["nemotron", "nemotron_text_image", "adaptive", "threshold_skip", "none"],
         default="nemotron",
         help='Use Nemotron reranking or pass retrieved pages through unchanged with "none".',
     )
@@ -91,6 +91,36 @@ def parse_args() -> argparse.Namespace:
         help="Maximum extracted text characters per candidate for text+image reranking.",
     )
     parser.add_argument("--neighbor-radius", type=int, default=0)
+    parser.add_argument(
+        "--adaptive-threshold-top1",
+        type=float,
+        default=None,
+        help="Skip expensive reranking when retrieval top-1 score is at least this value.",
+    )
+    parser.add_argument(
+        "--adaptive-threshold-gap",
+        type=float,
+        default=None,
+        help="Skip expensive reranking when retrieval top-1 minus top-2 score is at least this value.",
+    )
+    parser.add_argument(
+        "--adaptive-high-confidence-strategy",
+        choices=["no_reranker", "none", "skip"],
+        default="no_reranker",
+        help="Strategy used for high-confidence retrieval route.",
+    )
+    parser.add_argument(
+        "--threshold-skip-top1",
+        type=float,
+        default=0.8,
+        help="Skip reranking when retrieval top-1 score is at least this value.",
+    )
+    parser.add_argument(
+        "--threshold-skip-gap",
+        type=float,
+        default=0.1,
+        help="Skip reranking when retrieval top-1 minus top-2 score is at least this value.",
+    )
 
     parser.add_argument(
         "--fusion-mode",
@@ -735,6 +765,92 @@ def summarize_full_pipeline(results: list[dict[str, Any]]) -> dict[str, Any]:
         group_name: {key: optional_mean(group_rows, key) for key in metric_keys}
         for group_name, group_rows in grouped.items()
     }
+    route_groups: dict[str, list[dict[str, Any]]] = {}
+    for row in results:
+        route = row.get("adaptive_route")
+        if route:
+            route_groups.setdefault(str(route), []).append(row)
+    if route_groups:
+        skipped_rows = [row for row in results if row.get("adaptive_skipped_reranker") is True]
+        summary["adaptive_reranking"] = {
+            "route_counts": {route: len(route_rows) for route, route_rows in route_groups.items()},
+            "skipped_reranker_count": len(skipped_rows),
+            "skipped_reranker_rate": len(skipped_rows) / max(len(results), 1),
+            "latency_by_route": {
+                route: latency_summary(route_rows, "latency")
+                for route, route_rows in route_groups.items()
+            },
+            "rerank_latency_by_route": {
+                route: latency_summary(route_rows, "rerank_latency")
+                for route, route_rows in route_groups.items()
+            },
+            "quality_by_route": {
+                route: {
+                    "count": len(route_rows),
+                    "mean_f1": optional_mean(route_rows, "f1"),
+                    "exact_match": optional_mean(route_rows, "exact"),
+                    "f1_gt_0_5": (
+                        float(np.mean([float(row.get("f1", 0.0)) > 0.5 for row in route_rows]))
+                        if route_rows
+                        else 0.0
+                    ),
+                }
+                for route, route_rows in route_groups.items()
+            },
+        }
+    threshold_rows = [row for row in results if row.get("threshold_skip_route_used")]
+    if threshold_rows:
+        skipped_rows = [row for row in threshold_rows if row.get("threshold_skip_reranker") is True]
+        reranked_rows = [
+            row for row in threshold_rows if row.get("threshold_skip_reranker") is False
+        ]
+        scores = [
+            float(row["threshold_skip_top1"])
+            for row in threshold_rows
+            if row.get("threshold_skip_top1") is not None
+        ]
+        gaps = [
+            float(row["threshold_skip_gap"])
+            for row in threshold_rows
+            if row.get("threshold_skip_gap") is not None
+        ]
+        summary["threshold_skip_reranking"] = {
+            "threshold_top1": threshold_rows[0].get("threshold_skip_threshold_top1"),
+            "threshold_gap": threshold_rows[0].get("threshold_skip_threshold_gap"),
+            "skip_rate": len(skipped_rows) / max(len(threshold_rows), 1),
+            "number_skipped": len(skipped_rows),
+            "number_reranked": len(reranked_rows),
+            "latency_skipped": latency_summary(skipped_rows, "latency"),
+            "latency_reranked": latency_summary(reranked_rows, "latency"),
+            "quality_skipped": {
+                "mean_f1": optional_mean(skipped_rows, "f1"),
+                "exact_match": optional_mean(skipped_rows, "exact"),
+            },
+            "quality_reranked": {
+                "mean_f1": optional_mean(reranked_rows, "f1"),
+                "exact_match": optional_mean(reranked_rows, "exact"),
+            },
+            "retrieval_score_distribution": {
+                "min": float(np.min(scores)) if scores else None,
+                "max": float(np.max(scores)) if scores else None,
+                "mean": float(np.mean(scores)) if scores else None,
+                "median": float(np.percentile(scores, 50)) if scores else None,
+                "p25": float(np.percentile(scores, 25)) if scores else None,
+                "p75": float(np.percentile(scores, 75)) if scores else None,
+                "p90": float(np.percentile(scores, 90)) if scores else None,
+                "p95": float(np.percentile(scores, 95)) if scores else None,
+            },
+            "retrieval_gap_distribution": {
+                "min": float(np.min(gaps)) if gaps else None,
+                "max": float(np.max(gaps)) if gaps else None,
+                "mean": float(np.mean(gaps)) if gaps else None,
+                "median": float(np.percentile(gaps, 50)) if gaps else None,
+                "p25": float(np.percentile(gaps, 25)) if gaps else None,
+                "p75": float(np.percentile(gaps, 75)) if gaps else None,
+                "p90": float(np.percentile(gaps, 90)) if gaps else None,
+                "p95": float(np.percentile(gaps, 95)) if gaps else None,
+            },
+        }
     summary["additional_metrics_note"] = (
         "page_hit_at_k and table_hit_at_k are null unless the dataset provides oracle page/table annotations."
     )
@@ -779,12 +895,19 @@ def main() -> None:
                 "rerank_top_k": args.rerank_top_k,
                 "rerank_text_source_fields": (
                     args.rerank_text_source_fields
-                    if args.reranker_mode == "nemotron_text_image"
+                    if args.reranker_mode in {"nemotron_text_image", "adaptive"}
                     else []
                 ),
                 "rerank_text_max_chars": (
-                    args.rerank_text_max_chars if args.reranker_mode == "nemotron_text_image" else 0
+                    args.rerank_text_max_chars
+                    if args.reranker_mode in {"nemotron_text_image", "adaptive", "threshold_skip"}
+                    else 0
                 ),
+                "adaptive_threshold_top1": args.adaptive_threshold_top1,
+                "adaptive_threshold_gap": args.adaptive_threshold_gap,
+                "adaptive_high_confidence_strategy": args.adaptive_high_confidence_strategy,
+                "threshold_skip_top1": args.threshold_skip_top1,
+                "threshold_skip_gap": args.threshold_skip_gap,
                 "fusion_mode": args.fusion_mode,
                 "fusion_source_fields": args.fusion_source_fields,
                 "adaptive_policy": args.adaptive_policy,
@@ -842,6 +965,75 @@ def main() -> None:
             RerankerConfig(device=args.rerank_device, batch_size=args.rerank_batch_size),
             evidence_map=rerank_text_evidence_map,
             max_text_chars=args.rerank_text_max_chars,
+        )
+    elif args.reranker_mode == "adaptive":
+        from src.mmrag.config import RerankerConfig
+        from src.mmrag.rerank import NemotronVLReranker, NemotronVLTextImageReranker
+        from src.reranking.adaptive_reranker import AdaptiveReranker, LazyReranker
+        from src.reranking.no_reranker import NoReranker
+
+        print(
+            "[Adaptive Reranker] Loading text evidence fields="
+            f"{args.rerank_text_source_fields} from {args.data_dir}"
+        )
+        rerank_text_evidence_map = load_text_evidence_map(
+            args.data_dir,
+            source_fields=args.rerank_text_source_fields,
+        )
+        print(
+            "[Adaptive Reranker] Loaded text evidence pages: "
+            f"{len(rerank_text_evidence_map)} max_chars={args.rerank_text_max_chars}"
+        )
+        reranker_config = RerankerConfig(
+            device=args.rerank_device,
+            batch_size=args.rerank_batch_size,
+        )
+        image_reranker = LazyReranker(
+            lambda: NemotronVLReranker(reranker_config),
+            "image-only Nemotron VL reranker",
+        )
+        text_image_reranker = LazyReranker(
+            lambda: NemotronVLTextImageReranker(
+                reranker_config,
+                evidence_map=rerank_text_evidence_map,
+                max_text_chars=args.rerank_text_max_chars,
+            ),
+            "text+image Nemotron VL reranker",
+        )
+        reranker = AdaptiveReranker(
+            image_reranker=image_reranker,
+            text_image_reranker=text_image_reranker,
+            no_reranker=NoReranker(),
+            threshold_top1=args.adaptive_threshold_top1,
+            threshold_gap=args.adaptive_threshold_gap,
+            high_confidence_strategy=args.adaptive_high_confidence_strategy,
+        )
+    elif args.reranker_mode == "threshold_skip":
+        from src.mmrag.config import RerankerConfig
+        from src.mmrag.rerank import NemotronVLTextImageReranker
+        from src.reranking.threshold_skip_reranker import ThresholdSkipReranker
+
+        print(
+            "[Threshold Skip Reranker] Loading text evidence fields="
+            f"{args.rerank_text_source_fields} from {args.data_dir}"
+        )
+        rerank_text_evidence_map = load_text_evidence_map(
+            args.data_dir,
+            source_fields=args.rerank_text_source_fields,
+        )
+        print(
+            "[Threshold Skip Reranker] Loaded text evidence pages: "
+            f"{len(rerank_text_evidence_map)} max_chars={args.rerank_text_max_chars}"
+        )
+        fallback_reranker = NemotronVLTextImageReranker(
+            RerankerConfig(device=args.rerank_device, batch_size=args.rerank_batch_size),
+            evidence_map=rerank_text_evidence_map,
+            max_text_chars=args.rerank_text_max_chars,
+        )
+        reranker = ThresholdSkipReranker(
+            fallback_reranker=fallback_reranker,
+            threshold_top1=args.threshold_skip_top1,
+            threshold_gap=args.threshold_skip_gap,
         )
     fusion_text_reranker = None
     fusion_evidence_map: dict[tuple[str, int], dict[str, Any]] = {}
@@ -902,12 +1094,20 @@ def main() -> None:
         image_rerank_latency = 0.0
         text_rerank_latency = 0.0
         fusion_latency = 0.0
+        adaptive_route_info = None
+        threshold_skip_decision = None
         fusion_enabled = args.fusion_mode == "score_fusion"
         if fusion_enabled:
             attach_text_evidence(retrieved, fusion_evidence_map)
             image_rerank_start = time.time()
             if reranker is None:
                 image_scored = retrieved[:]
+            elif args.reranker_mode == "adaptive":
+                image_scored = reranker.rerank(question, retrieved, metadata=row)
+                adaptive_route_info = getattr(reranker, "last_route_info", None)
+            elif args.reranker_mode == "threshold_skip":
+                image_scored = reranker.rerank(question, retrieved, metadata=row)
+                threshold_skip_decision = getattr(reranker, "last_decision", None)
             else:
                 image_scored = reranker.rerank(question, retrieved)
             image_rerank_latency = time.time() - image_rerank_start
@@ -927,6 +1127,12 @@ def main() -> None:
             fusion_latency = time.time() - fusion_start
         elif reranker is None:
             reranked = retrieved[: args.rerank_top_k]
+        elif args.reranker_mode == "adaptive":
+            reranked = reranker.rerank(question, retrieved, metadata=row)[: args.rerank_top_k]
+            adaptive_route_info = getattr(reranker, "last_route_info", None)
+        elif args.reranker_mode == "threshold_skip":
+            reranked = reranker.rerank(question, retrieved, metadata=row)[: args.rerank_top_k]
+            threshold_skip_decision = getattr(reranker, "last_decision", None)
         else:
             reranked = reranker.rerank(question, retrieved)[: args.rerank_top_k]
         rerank_latency = time.time() - rerank_start
@@ -982,6 +1188,23 @@ def main() -> None:
             print(
                 "    rerank_text_chars_top5="
                 f"{[int(getattr(candidate, 'rerank_text_chars', 0) or 0) for candidate in reranked[:5]]}"
+            )
+        if adaptive_route_info is not None:
+            print(
+                "    adaptive_route="
+                f"{adaptive_route_info.route} strategy={adaptive_route_info.strategy} "
+                f"skipped={adaptive_route_info.skipped_reranker} "
+                f"top1={adaptive_route_info.retrieval_top1_score} "
+                f"gap={adaptive_route_info.retrieval_top1_gap}"
+            )
+        if threshold_skip_decision is not None:
+            stats = threshold_skip_decision.confidence_stats
+            print(
+                "    threshold_skip="
+                f"route={threshold_skip_decision.route_used} "
+                f"skip={threshold_skip_decision.skip_reranker} "
+                f"top1={stats.get('top1_score')} top2={stats.get('top2_score')} "
+                f"gap={stats.get('gap')} reason={threshold_skip_decision.reason}"
             )
         if fusion_enabled:
             print(
@@ -1104,16 +1327,87 @@ def main() -> None:
             "reranker_mode": args.reranker_mode,
             "rerank_text_source_fields": (
                 args.rerank_text_source_fields
-                if args.reranker_mode == "nemotron_text_image"
+                if args.reranker_mode in {"nemotron_text_image", "adaptive", "threshold_skip"}
                 else []
             ),
             "rerank_text_max_chars": (
-                args.rerank_text_max_chars if args.reranker_mode == "nemotron_text_image" else 0
+                args.rerank_text_max_chars
+                if args.reranker_mode in {"nemotron_text_image", "adaptive", "threshold_skip"}
+                else 0
             ),
             "rerank_text_chars": (
                 [int(getattr(candidate, "rerank_text_chars", 0) or 0) for candidate in reranked]
-                if args.reranker_mode == "nemotron_text_image"
+                if args.reranker_mode in {"nemotron_text_image", "adaptive", "threshold_skip"}
                 else []
+            ),
+            "adaptive_route": (
+                adaptive_route_info.route if adaptive_route_info is not None else None
+            ),
+            "adaptive_strategy": (
+                adaptive_route_info.strategy if adaptive_route_info is not None else None
+            ),
+            "adaptive_skipped_reranker": (
+                adaptive_route_info.skipped_reranker if adaptive_route_info is not None else None
+            ),
+            "adaptive_route_reason": (
+                adaptive_route_info.reason if adaptive_route_info is not None else None
+            ),
+            "adaptive_route_latency": (
+                adaptive_route_info.latency if adaptive_route_info is not None else None
+            ),
+            "adaptive_retrieval_top1_score": (
+                adaptive_route_info.retrieval_top1_score
+                if adaptive_route_info is not None
+                else None
+            ),
+            "adaptive_retrieval_top1_gap": (
+                adaptive_route_info.retrieval_top1_gap if adaptive_route_info is not None else None
+            ),
+            "threshold_skip_top1": (
+                threshold_skip_decision.confidence_stats.get("top1_score")
+                if threshold_skip_decision is not None
+                else None
+            ),
+            "threshold_skip_top2": (
+                threshold_skip_decision.confidence_stats.get("top2_score")
+                if threshold_skip_decision is not None
+                else None
+            ),
+            "threshold_skip_gap": (
+                threshold_skip_decision.confidence_stats.get("gap")
+                if threshold_skip_decision is not None
+                else None
+            ),
+            "threshold_skip_relative_gap": (
+                threshold_skip_decision.confidence_stats.get("relative_gap")
+                if threshold_skip_decision is not None
+                else None
+            ),
+            "threshold_skip_candidates_count": (
+                threshold_skip_decision.confidence_stats.get("candidates_count")
+                if threshold_skip_decision is not None
+                else None
+            ),
+            "threshold_skip_reranker": (
+                threshold_skip_decision.skip_reranker
+                if threshold_skip_decision is not None
+                else None
+            ),
+            "threshold_skip_route_used": (
+                threshold_skip_decision.route_used if threshold_skip_decision is not None else None
+            ),
+            "threshold_skip_reason": (
+                threshold_skip_decision.reason if threshold_skip_decision is not None else None
+            ),
+            "threshold_skip_threshold_top1": (
+                threshold_skip_decision.threshold_top1
+                if threshold_skip_decision is not None
+                else None
+            ),
+            "threshold_skip_threshold_gap": (
+                threshold_skip_decision.threshold_gap
+                if threshold_skip_decision is not None
+                else None
             ),
             "fusion_mode": args.fusion_mode,
             "fusion_weights": {

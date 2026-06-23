@@ -213,6 +213,10 @@ def build_eval_command(config: dict[str, Any], raw_output: Path) -> list[str]:
             reranker_cli_mode = "none"
         elif reranker_mode in {"nemotron_text_image", "text_image"}:
             reranker_cli_mode = "nemotron_text_image"
+        elif reranker_mode in {"adaptive", "adaptive_reranking"}:
+            reranker_cli_mode = "adaptive"
+        elif reranker_mode in {"threshold_skip", "threshold_skip_reranking"}:
+            reranker_cli_mode = "threshold_skip"
         else:
             reranker_cli_mode = "nemotron"
         openai_vlm_cfg = generation_cfg.get("openai_vlm", config.get("openai_vlm", {}))
@@ -280,6 +284,54 @@ def build_eval_command(config: dict[str, Any], raw_output: Path) -> list[str]:
                 [
                     "--rerank-text-max-chars",
                     str(rerank_cfg.get("text_max_chars", 4096)),
+                ]
+            )
+            if rerank_cfg.get("text_source_fields"):
+                command.extend(
+                    [
+                        "--rerank-text-source-fields",
+                        *_as_list(
+                            rerank_cfg.get("text_source_fields"),
+                            ["table_text", "caption", "page_text", "ocr"],
+                        ),
+                    ]
+                )
+        elif reranker_cli_mode == "adaptive":
+            adaptive_cfg = config.get("adaptive_reranking", {})
+            command.extend(
+                [
+                    "--rerank-text-max-chars",
+                    str(rerank_cfg.get("text_max_chars", 4096)),
+                    "--adaptive-high-confidence-strategy",
+                    str(adaptive_cfg.get("high_confidence_strategy", "no_reranker")),
+                ]
+            )
+            if rerank_cfg.get("text_source_fields"):
+                command.extend(
+                    [
+                        "--rerank-text-source-fields",
+                        *_as_list(
+                            rerank_cfg.get("text_source_fields"),
+                            ["table_text", "caption", "page_text", "ocr"],
+                        ),
+                    ]
+                )
+            if adaptive_cfg.get("threshold_top1") not in (None, {}, ""):
+                command.extend(
+                    ["--adaptive-threshold-top1", str(adaptive_cfg.get("threshold_top1"))]
+                )
+            if adaptive_cfg.get("threshold_gap") not in (None, {}, ""):
+                command.extend(["--adaptive-threshold-gap", str(adaptive_cfg.get("threshold_gap"))])
+        elif reranker_cli_mode == "threshold_skip":
+            threshold_cfg = config.get("threshold_skip", {})
+            command.extend(
+                [
+                    "--rerank-text-max-chars",
+                    str(rerank_cfg.get("text_max_chars", 4096)),
+                    "--threshold-skip-top1",
+                    str(threshold_cfg.get("threshold_top1", 0.8)),
+                    "--threshold-skip-gap",
+                    str(threshold_cfg.get("threshold_gap", 0.1)),
                 ]
             )
             if rerank_cfg.get("text_source_fields"):
@@ -610,6 +662,111 @@ def write_summary(results_dir: Path, config: dict[str, Any], metrics: dict[str, 
     (results_dir / "summary.md").write_text("\n".join(text), encoding="utf-8")
 
 
+def _fmt(value: Any, digits: int = 4) -> str:
+    if value is None:
+        return "not available"
+    if isinstance(value, float):
+        return f"{value:.{digits}f}"
+    return str(value)
+
+
+def _mean_optional(rows: list[dict[str, Any]], key: str) -> float | None:
+    values = [float(row[key]) for row in rows if row.get(key) is not None]
+    return sum(values) / len(values) if values else None
+
+
+def write_adaptive_reranking_report(
+    predictions: list[dict[str, Any]],
+    metrics: dict[str, Any],
+    results_dir: Path,
+    config: dict[str, Any],
+) -> None:
+    report_dir = Path("reports/adaptive_reranking")
+    report_dir.mkdir(parents=True, exist_ok=True)
+    routes: dict[str, list[dict[str, Any]]] = {}
+    for row in predictions:
+        routes.setdefault(str(row.get("adaptive_route") or "unknown"), []).append(row)
+    skipped = [row for row in predictions if row.get("adaptive_skipped_reranker") is True]
+    baselines = [
+        ("Best quality baseline", 0.7023, 13.6441),
+        ("Fast baseline", 0.6575, 2.5080),
+        ("No-reranker full image+text baseline", 0.6784, 3.4263),
+    ]
+    mean_f1 = metrics.get("mean_f1")
+    latency = metrics.get("latency_seconds", {}).get("mean")
+    comparison_rows = []
+    for name, baseline_f1, baseline_latency in baselines:
+        delta_f1 = float(mean_f1) - baseline_f1 if mean_f1 is not None else None
+        delta_latency = float(latency) - baseline_latency if latency is not None else None
+        comparison_rows.append(
+            f"| {name} | {baseline_f1:.4f} | {baseline_latency:.4f} | "
+            f"{_fmt(delta_f1)} | {_fmt(delta_latency)} |"
+        )
+
+    route_rows = []
+    for route, route_items in sorted(routes.items()):
+        route_rows.append(
+            f"| {route} | {len(route_items)} | {_fmt(_mean_optional(route_items, 'f1'))} | "
+            f"{_fmt(_mean_optional(route_items, 'latency'))} | "
+            f"{_fmt(_mean_optional(route_items, 'rerank_latency'))} |"
+        )
+
+    text = [
+        "# Adaptive Reranking Summary",
+        "",
+        "## 1. Что было реализовано",
+        "",
+        "Добавлен отдельный экспериментальный режим `adaptive`, который выбирает стратегию реранкинга для каждого вопроса. Существующие конфиги, результаты и реализации реранкеров не изменяются.",
+        "",
+        "## 2. Routing strategies",
+        "",
+        "- `high_confidence`: retrieval считается достаточно уверенным, дорогой VL reranker пропускается.",
+        "- `table_or_text`: используется full image+text Nemotron VL reranker.",
+        "- `visual`: используется image-only Nemotron VL reranker.",
+        "- `unknown`: используется default best strategy, full image+text Nemotron VL reranker.",
+        "",
+        "## 3. Route distribution",
+        "",
+        "| Route | Questions | Mean F1 | Mean latency | Mean rerank latency |",
+        "|---|---:|---:|---:|---:|",
+        *route_rows,
+        "",
+        "## 4. Skipped reranker",
+        "",
+        f"- skipped questions: {len(skipped)}",
+        f"- skipped share: {_fmt(len(skipped) / max(len(predictions), 1))}",
+        "",
+        "## 5. Итоговые метрики",
+        "",
+        f"- total questions: {metrics.get('total_questions')}",
+        f"- Mean F1: {_fmt(metrics.get('mean_f1'))}",
+        f"- Exact Match: {_fmt(metrics.get('exact_match'))}",
+        f"- F1 > 0.5: {_fmt(metrics.get('accuracy_f1_gt_0_5'))}",
+        f"- MM-T F1: {_fmt(metrics.get('by_modality', {}).get('multimodal-t', {}).get('mean_f1'))}",
+        f"- MM-F F1: {_fmt(metrics.get('by_modality', {}).get('multimodal-f', {}).get('mean_f1'))}",
+        f"- latency: {_fmt(metrics.get('latency_seconds', {}).get('mean'))} sec",
+        "",
+        "## 6. Сравнение с baseline",
+        "",
+        "| Baseline | Baseline Mean F1 | Baseline latency | Adaptive delta F1 | Adaptive delta latency |",
+        "|---|---:|---:|---:|---:|",
+        *comparison_rows,
+        "",
+        "## 7. Вывод",
+        "",
+        "Заполнено автоматически после запуска эксперимента. Интерпретация: если `delta F1` около нуля или положительный, а `delta latency` отрицательный относительно best quality baseline, adaptive routing полезен для защиты как quality/latency improvement. Если качество заметно ниже, результат лучше использовать как дополнительную абляцию, а не как замену лучшей конфигурации статьи.",
+        "",
+        "## Reproducibility",
+        "",
+        f"- config: `configs/experiments/adaptive_reranking_308_qwen3vl30b.yaml`",
+        f"- results: `{results_dir}`",
+        f"- reranking mode: `{config.get('reranking', {}).get('mode')}`",
+        f"- thresholds: `{config.get('adaptive_reranking', {})}`",
+        "",
+    ]
+    (report_dir / "adaptive_reranking_summary.md").write_text("\n".join(text), encoding="utf-8")
+
+
 def log_header(
     config_path: Path, results_dir: Path, config: dict[str, Any], command: list[str]
 ) -> str:
@@ -718,6 +875,11 @@ def main() -> None:
     metrics = write_metrics_artifacts(predictions, results_dir)
     write_error_cases(predictions, results_dir / "error_cases.csv")
     write_summary(results_dir, config, metrics)
+    if str(config.get("reranking", {}).get("mode", "")).lower() in {
+        "adaptive",
+        "adaptive_reranking",
+    }:
+        write_adaptive_reranking_report(predictions, metrics, results_dir, config)
     shutil.copy2(raw_output, results_dir / "predictions_raw.json")
     append_footer(log_path, predictions, metrics)
     successful = sum(1 for row in predictions if row.get("status") == "success")

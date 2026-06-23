@@ -1,0 +1,10 @@
+alpha,beta,gamma,mean_f1,exact_match,f1_gt_0_5,mm_t_f1,mm_f_f1,latency,number_of_candidates,notes
+0.2,0.2,0.6,,,,,,,10,not_run_or_metrics_missing
+0.2,0.3,0.5,,,,,,,10,not_run_or_metrics_missing
+0.2,0.4,0.4,,,,,,,10,not_run_or_metrics_missing
+0.3,0.2,0.5,,,,,,,10,not_run_or_metrics_missing
+0.3,0.3,0.4,,,,,,,10,not_run_or_metrics_missing
+0.3,0.4,0.3,,,,,,,10,not_run_or_metrics_missing
+0.4,0.2,0.4,,,,,,,10,not_run_or_metrics_missing
+0.4,0.3,0.3,,,,,,,10,not_run_or_metrics_missing
+0.5,0.2,0.3,,,,,,,10,not_run_or_metrics_missing

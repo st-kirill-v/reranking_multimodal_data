@@ -1,0 +1,81 @@
+experiment_name: fusion_weight_search_308_qwen3vl30b_a020_b030_g050
+results_root: results
+seed: 42
+
+dataset:
+  name: docbench
+  split: multimodal_308
+  subset: multimodal-t,multimodal-f
+  types: ["multimodal-t", "multimodal-f"]
+  data_dir: data/datasets/docbench
+
+evaluation:
+  evaluator: full_pipeline
+  adaptive_policy: text_top3_visual_top5
+  text_top_pages: 3
+  visual_top_pages: 5
+
+retrieval:
+  mode: nemotron_image
+  backend: nemotron_image
+  model_id: models/nemotron/embed-vl-1b-v2
+  index_dir: index
+  index_name: nemotron
+  device: cuda
+  first_stage_top_k: 30
+
+reranking:
+  mode: nemotron_vl_cross_encoder
+  model_id: nvidia/llama-nemotron-rerank-vl-1b-v2
+  top_k: 10
+  device: cuda
+  batch_size: 2
+  max_input_tiles: 6
+  max_length: 2048
+
+fusion:
+  mode: score_fusion
+  source_fields: ["page_text", "caption", "table_text"]
+  alpha: 0.2
+  beta: 0.3
+  gamma: 0.5
+  lambda_number: 0.05
+  lambda_keyword: 0.05
+  lambda_exact_phrase: 0.05
+  lambda_table_header: 0.2
+  text_reranker_model_id: BAAI/bge-reranker-large
+  text_reranker_backend: cross_encoder
+  text_reranker_device: cuda
+  text_reranker_batch_size: 4
+  text_reranker_max_length: 512
+  trust_remote_code: true
+
+generation:
+  model_id: openai/qwen3-vl-30b
+  device: cuda
+  prompt_style: concise
+  prompt_profile: docbench_hybrid_v1
+  multimodal_generation_backend: openai_compatible_vlm
+  max_new_tokens: 192
+  max_context_images: 5
+  max_image_long_edge: 1600
+  do_sample: false
+  no_4bit: false
+  answer_refine: none
+  openai_vlm:
+    base_url: "http://10.32.15.88:4000/v1"
+    model: "openai/qwen3-vl-30b"
+    api_key_env: "OPENAI_COMPAT_API_KEY"
+    temperature: 0
+    max_tokens: 192
+    timeout: 180
+
+cropping:
+  crop_policy: layout_aware_v2
+  visual_crop_policy: layout_aware_v2
+  context_mode: full_page_plus_crop
+  layout_context_mode: full_page_plus_crop
+  debug_crop_dir: data/debug_crops/fusion_weight_search_308_qwen3vl30b/a020_b030_g050
+
+output:
+  directory: results/fusion_weight_search_308_qwen3vl30b/a020_b030_g050
