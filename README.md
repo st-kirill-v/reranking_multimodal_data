@@ -262,17 +262,7 @@ uv venv
 uv sync
 ```
 
-Для Qwen3-VL через OpenAI-compatible backend:
 
-```bash
-export OPENAI_COMPAT_API_KEY="..."
-```
-
-Windows PowerShell:
-
-```powershell
-$env:OPENAI_COMPAT_API_KEY="..."
-```
 
 ### Best Multimodal Reranker
 
