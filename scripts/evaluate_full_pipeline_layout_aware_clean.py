@@ -71,7 +71,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--first-stage-top-k", type=int, default=30)
     parser.add_argument(
         "--reranker-mode",
-        choices=["nemotron", "nemotron_text_image", "adaptive", "threshold_skip", "none"],
+        choices=[
+            "nemotron",
+            "nemotron_text_image",
+            "text_cross_encoder",
+            "adaptive",
+            "threshold_skip",
+            "none",
+        ],
         default="nemotron",
         help='Use Nemotron reranking or pass retrieved pages through unchanged with "none".',
     )
@@ -82,14 +89,24 @@ def parse_args() -> argparse.Namespace:
         "--rerank-text-source-fields",
         nargs="*",
         default=["table_text", "caption", "page_text", "ocr"],
-        help="Text fields used only by --reranker-mode nemotron_text_image.",
+        help="Text fields used by text-aware reranker modes.",
     )
     parser.add_argument(
         "--rerank-text-max-chars",
         type=int,
         default=4096,
-        help="Maximum extracted text characters per candidate for text+image reranking.",
+        help="Maximum extracted text characters per candidate for text-aware reranking.",
     )
+    parser.add_argument("--text-reranker-model-id", default="BAAI/bge-reranker-large")
+    parser.add_argument("--text-reranker-device", default="cuda")
+    parser.add_argument("--text-reranker-batch-size", type=int, default=4)
+    parser.add_argument("--text-reranker-max-length", type=int, default=512)
+    parser.add_argument(
+        "--text-reranker-backend",
+        choices=["cross_encoder", "lexical"],
+        default="cross_encoder",
+    )
+    parser.add_argument("--text-reranker-no-trust-remote-code", action="store_true")
     parser.add_argument("--neighbor-radius", type=int, default=0)
     parser.add_argument(
         "--adaptive-threshold-top1",
@@ -895,12 +912,14 @@ def main() -> None:
                 "rerank_top_k": args.rerank_top_k,
                 "rerank_text_source_fields": (
                     args.rerank_text_source_fields
-                    if args.reranker_mode in {"nemotron_text_image", "adaptive"}
+                    if args.reranker_mode
+                    in {"nemotron_text_image", "text_cross_encoder", "adaptive", "threshold_skip"}
                     else []
                 ),
                 "rerank_text_max_chars": (
                     args.rerank_text_max_chars
-                    if args.reranker_mode in {"nemotron_text_image", "adaptive", "threshold_skip"}
+                    if args.reranker_mode
+                    in {"nemotron_text_image", "text_cross_encoder", "adaptive", "threshold_skip"}
                     else 0
                 ),
                 "adaptive_threshold_top1": args.adaptive_threshold_top1,
@@ -965,6 +984,27 @@ def main() -> None:
             RerankerConfig(device=args.rerank_device, batch_size=args.rerank_batch_size),
             evidence_map=rerank_text_evidence_map,
             max_text_chars=args.rerank_text_max_chars,
+        )
+    elif args.reranker_mode == "text_cross_encoder":
+        print(
+            "[Text Reranker] Loading text evidence fields="
+            f"{args.rerank_text_source_fields} from {args.data_dir}"
+        )
+        rerank_text_evidence_map = load_text_evidence_map(
+            args.data_dir,
+            source_fields=args.rerank_text_source_fields,
+        )
+        print(
+            "[Text Reranker] Loaded text evidence pages: "
+            f"{len(rerank_text_evidence_map)} max_chars={args.rerank_text_max_chars}"
+        )
+        reranker = create_text_reranker(
+            args.text_reranker_model_id,
+            device=args.text_reranker_device,
+            batch_size=args.text_reranker_batch_size,
+            max_length=args.text_reranker_max_length,
+            trust_remote_code=not args.text_reranker_no_trust_remote_code,
+            backend=args.text_reranker_backend,
         )
     elif args.reranker_mode == "adaptive":
         from src.mmrag.config import RerankerConfig
@@ -1130,6 +1170,15 @@ def main() -> None:
         elif args.reranker_mode == "adaptive":
             reranked = reranker.rerank(question, retrieved, metadata=row)[: args.rerank_top_k]
             adaptive_route_info = getattr(reranker, "last_route_info", None)
+        elif args.reranker_mode == "text_cross_encoder":
+            attach_text_evidence(retrieved, rerank_text_evidence_map)
+            for candidate in retrieved:
+                candidate.text = str(getattr(candidate, "text", "") or "")[
+                    : args.rerank_text_max_chars
+                ]
+                candidate.rerank_text_chars = len(candidate.text)
+            rerank_output = reranker.rerank(question, retrieved)
+            reranked = rerank_output.candidates[: args.rerank_top_k]
         elif args.reranker_mode == "threshold_skip":
             reranked = reranker.rerank(question, retrieved, metadata=row)[: args.rerank_top_k]
             threshold_skip_decision = getattr(reranker, "last_decision", None)
@@ -1184,7 +1233,7 @@ def main() -> None:
             "    reranked_top5="
             f"{[f'{candidate.folder}/{candidate.page}' for candidate in reranked[:5]]}"
         )
-        if args.reranker_mode == "nemotron_text_image":
+        if args.reranker_mode in {"nemotron_text_image", "text_cross_encoder"}:
             print(
                 "    rerank_text_chars_top5="
                 f"{[int(getattr(candidate, 'rerank_text_chars', 0) or 0) for candidate in reranked[:5]]}"
@@ -1327,17 +1376,34 @@ def main() -> None:
             "reranker_mode": args.reranker_mode,
             "rerank_text_source_fields": (
                 args.rerank_text_source_fields
-                if args.reranker_mode in {"nemotron_text_image", "adaptive", "threshold_skip"}
+                if args.reranker_mode
+                in {"nemotron_text_image", "text_cross_encoder", "adaptive", "threshold_skip"}
                 else []
             ),
             "rerank_text_max_chars": (
                 args.rerank_text_max_chars
-                if args.reranker_mode in {"nemotron_text_image", "adaptive", "threshold_skip"}
+                if args.reranker_mode
+                in {"nemotron_text_image", "text_cross_encoder", "adaptive", "threshold_skip"}
                 else 0
             ),
             "rerank_text_chars": (
                 [int(getattr(candidate, "rerank_text_chars", 0) or 0) for candidate in reranked]
-                if args.reranker_mode in {"nemotron_text_image", "adaptive", "threshold_skip"}
+                if args.reranker_mode
+                in {"nemotron_text_image", "text_cross_encoder", "adaptive", "threshold_skip"}
+                else []
+            ),
+            "text_reranker_model_id": (
+                args.text_reranker_model_id if args.reranker_mode == "text_cross_encoder" else None
+            ),
+            "text_reranker_backend": (
+                args.text_reranker_backend if args.reranker_mode == "text_cross_encoder" else None
+            ),
+            "text_rerank_scores": (
+                [
+                    float(getattr(candidate, "text_rerank_score", 0.0) or 0.0)
+                    for candidate in reranked
+                ]
+                if args.reranker_mode == "text_cross_encoder"
                 else []
             ),
             "adaptive_route": (

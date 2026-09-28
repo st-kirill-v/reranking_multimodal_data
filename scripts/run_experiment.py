@@ -211,6 +211,8 @@ def build_eval_command(config: dict[str, Any], raw_output: Path) -> list[str]:
         reranker_mode = str(rerank_cfg.get("mode", "nemotron_vl_cross_encoder"))
         if reranker_mode in {"none", "no_reranking"}:
             reranker_cli_mode = "none"
+        elif reranker_mode in {"text_cross_encoder", "text_reranker"}:
+            reranker_cli_mode = "text_cross_encoder"
         elif reranker_mode in {"nemotron_text_image", "text_image"}:
             reranker_cli_mode = "nemotron_text_image"
         elif reranker_mode in {"adaptive", "adaptive_reranking"}:
@@ -296,6 +298,35 @@ def build_eval_command(config: dict[str, Any], raw_output: Path) -> list[str]:
                         ),
                     ]
                 )
+        elif reranker_cli_mode == "text_cross_encoder":
+            command.extend(
+                [
+                    "--rerank-text-max-chars",
+                    str(rerank_cfg.get("text_max_chars", 4096)),
+                    "--text-reranker-model-id",
+                    str(rerank_cfg.get("model_id", "BAAI/bge-reranker-large")),
+                    "--text-reranker-device",
+                    str(rerank_cfg.get("device", "cuda")),
+                    "--text-reranker-batch-size",
+                    str(rerank_cfg.get("batch_size", 4)),
+                    "--text-reranker-max-length",
+                    str(rerank_cfg.get("max_length", 512)),
+                    "--text-reranker-backend",
+                    str(rerank_cfg.get("backend", "cross_encoder")),
+                ]
+            )
+            if rerank_cfg.get("text_source_fields"):
+                command.extend(
+                    [
+                        "--rerank-text-source-fields",
+                        *_as_list(
+                            rerank_cfg.get("text_source_fields"),
+                            ["table_text", "caption", "page_text", "ocr"],
+                        ),
+                    ]
+                )
+            if not _as_bool(rerank_cfg.get("trust_remote_code", True)):
+                command.append("--text-reranker-no-trust-remote-code")
         elif reranker_cli_mode == "adaptive":
             adaptive_cfg = config.get("adaptive_reranking", {})
             command.extend(
@@ -464,6 +495,19 @@ def build_eval_command(config: dict[str, Any], raw_output: Path) -> list[str]:
             )
             if not _as_bool(retrieval_cfg.get("normalize", True)):
                 command.append("--no-text-encoder-normalize")
+        elif text_retriever_backend == "nemotron_image":
+            command.extend(
+                [
+                    "--nemotron-index-dir",
+                    str(retrieval_cfg.get("index_dir", "index")),
+                    "--nemotron-index-name",
+                    str(retrieval_cfg.get("index_name", "nemotron")),
+                    "--nemotron-model-id",
+                    str(retrieval_cfg.get("model_id", "models/nemotron/embed-vl-1b-v2")),
+                    "--nemotron-device",
+                    str(retrieval_cfg.get("device", "cuda")),
+                ]
+            )
         if text_cfg.get("source_fields"):
             command.extend(
                 ["--text-source-fields", *_as_list(text_cfg.get("source_fields"), ["page_text"])]

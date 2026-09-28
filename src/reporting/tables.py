@@ -183,6 +183,8 @@ def _method_group(row: dict[str, Any]) -> str:
     reranker = str(row.get("reranker") or "").lower()
     evidence = str(row.get("evidence") or "").lower()
     vlm = str(row.get("vlm") or "").lower()
+    if experiment.startswith("image_text_full_308_nemotron"):
+        return "Full image+text, Nemotron visual"
     if "image_text_fusion" in experiment:
         if "nemotron" in experiment:
             return "Image+text fusion, Nemotron visual"

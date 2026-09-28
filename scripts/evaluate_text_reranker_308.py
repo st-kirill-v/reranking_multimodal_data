@@ -24,7 +24,9 @@ from src.cropping.layout_aware_eval import (  # noqa: E402
 )
 from src.generation.openai_compatible_vlm import create_openai_compatible_vlm  # noqa: E402
 from src.mmrag.dataset import load_docbench_questions  # noqa: E402
+from src.reranking.fusion import attach_text_evidence, load_text_evidence_map  # noqa: E402
 from src.reranking.text_reranker import create_text_reranker  # noqa: E402
+from src.retrieval.nemotron_image import NemotronImageRetriever  # noqa: E402
 from src.retrieval.text_encoder_retriever import TextEncoderRetriever  # noqa: E402
 from src.retrieval.text_page_retriever import TextPageBM25Retriever, TextPageCandidate  # noqa: E402
 
@@ -32,7 +34,7 @@ from src.retrieval.text_page_retriever import TextPageBM25Retriever, TextPageCan
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "DocBench 308 text-only reranking experiment: page_text retrieval -> "
+            "DocBench 308 text-only reranking experiment: candidate retrieval -> "
             "neural text reranker -> Qwen3-VL-30B text generation -> metrics."
         )
     )
@@ -41,7 +43,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--first-stage-top-k", type=int, default=30)
     parser.add_argument(
         "--text-retriever-backend",
-        choices=["bm25", "text_encoder"],
+        choices=["bm25", "text_encoder", "nemotron_image"],
         default="bm25",
     )
     parser.add_argument(
@@ -54,6 +56,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--text-encoder-batch-size", type=int, default=32)
     parser.add_argument("--text-encoder-max-length", type=int, default=512)
     parser.add_argument("--no-text-encoder-normalize", action="store_true")
+    parser.add_argument("--nemotron-index-dir", type=Path, default=Path("index"))
+    parser.add_argument("--nemotron-index-name", default="nemotron")
+    parser.add_argument("--nemotron-model-id", default="models/nemotron/embed-vl-1b-v2")
+    parser.add_argument("--nemotron-device", default="cuda")
     parser.add_argument("--rerank-top-k", type=int, default=10)
     parser.add_argument("--context-top-pages", type=int, default=3)
     parser.add_argument("--text-context-max-chars", type=int, default=12000)
@@ -116,19 +122,21 @@ def load_questions(args: argparse.Namespace) -> list[dict[str, Any]]:
     return rows
 
 
-def candidate_label(candidate: TextPageCandidate) -> str:
-    return f"{candidate.doc_id}/{candidate.page}"
+def candidate_doc_id(candidate: Any) -> str:
+    return str(getattr(candidate, "doc_id", getattr(candidate, "folder", "")))
 
 
-def build_text_context(
-    candidates: list[TextPageCandidate], max_chars: int
-) -> tuple[str, bool, int]:
+def candidate_label(candidate: Any) -> str:
+    return f"{candidate_doc_id(candidate)}/{candidate.page}"
+
+
+def build_text_context(candidates: list[Any], max_chars: int) -> tuple[str, bool, int]:
     chunks: list[str] = []
     total = 0
     truncated = False
     for candidate in candidates:
         header = (
-            f"[doc_id={candidate.doc_id} page={candidate.page} "
+            f"[doc_id={candidate_doc_id(candidate)} page={candidate.page} "
             f"retrieval_score={candidate.score:.4f} "
             f"source={candidate.source} "
             f"evidence_fields={','.join(candidate.evidence_fields or [])} "
@@ -242,6 +250,9 @@ def main() -> None:
                 "text_retriever_backend": args.text_retriever_backend,
                 "text_encoder_index_dir": str(args.text_encoder_index_dir),
                 "text_encoder_model_id": args.text_encoder_model_id,
+                "nemotron_index_dir": str(args.nemotron_index_dir),
+                "nemotron_index_name": args.nemotron_index_name,
+                "nemotron_model_id": args.nemotron_model_id,
                 "text_source_fields": args.text_source_fields,
                 "first_stage_top_k": args.first_stage_top_k,
                 "text_reranker_model_id": args.text_reranker_model_id,
@@ -259,6 +270,7 @@ def main() -> None:
     if args.dry_run:
         return
 
+    text_evidence_map = None
     if args.text_retriever_backend == "text_encoder":
         retriever = TextEncoderRetriever(
             args.text_encoder_index_dir,
@@ -268,9 +280,30 @@ def main() -> None:
             max_length=args.text_encoder_max_length,
             normalize=not args.no_text_encoder_normalize,
         )
+    elif args.text_retriever_backend == "nemotron_image":
+        retriever = NemotronImageRetriever(
+            index_dir=args.nemotron_index_dir,
+            index_name=args.nemotron_index_name,
+            model_id=args.nemotron_model_id,
+            device=args.nemotron_device,
+        )
+        text_evidence_map = load_text_evidence_map(
+            args.data_dir,
+            source_fields=args.text_source_fields,
+        )
     else:
         retriever = TextPageBM25Retriever(args.data_dir, source_fields=args.text_source_fields)
-    print(f"[TextRetriever] {json.dumps(retriever.stats(), ensure_ascii=False)}")
+    retriever_stats = (
+        retriever.stats()
+        if hasattr(retriever, "stats")
+        else {
+            "backend": args.text_retriever_backend,
+            "model_id": getattr(retriever, "model_id", None),
+            "index_name": getattr(retriever, "index_name", None),
+            "num_pages": int(getattr(getattr(retriever, "index", None), "ntotal", 0)),
+        }
+    )
+    print(f"[TextRetriever] {json.dumps(retriever_stats, ensure_ascii=False)}")
     reranker = None
     if args.text_reranker_backend != "none":
         reranker = create_text_reranker(
@@ -300,6 +333,8 @@ def main() -> None:
 
         retrieval_start = time.time()
         retrieved = retriever.search(question, top_k=args.first_stage_top_k)
+        if text_evidence_map is not None:
+            attach_text_evidence(retrieved, text_evidence_map)
         retrieval_latency = time.time() - retrieval_start
 
         if reranker is None:
@@ -404,6 +439,19 @@ def main() -> None:
                 args.text_encoder_model_id
                 if args.text_retriever_backend == "text_encoder"
                 else None
+            ),
+            "nemotron_index_dir": (
+                str(args.nemotron_index_dir)
+                if args.text_retriever_backend == "nemotron_image"
+                else None
+            ),
+            "nemotron_index_name": (
+                args.nemotron_index_name
+                if args.text_retriever_backend == "nemotron_image"
+                else None
+            ),
+            "nemotron_model_id": (
+                args.nemotron_model_id if args.text_retriever_backend == "nemotron_image" else None
             ),
             "text_source_fields": args.text_source_fields,
             "text_reranker_backend": rerank_backend,

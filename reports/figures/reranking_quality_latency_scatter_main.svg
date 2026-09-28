@@ -34,13 +34,13 @@
 <text x="880" y="1072" font-family="Arial" font-size="27" font-weight="700" fill="#1c2731" text-anchor="middle">Средняя задержка (секунды)</text>
 <text x="70" y="570" font-family="Arial" font-size="27" font-weight="700" fill="#1c2731" text-anchor="middle">Mean F1</text>
 <circle cx="303" cy="786" r="14" fill="#5b6977"/>
-<text x="328" y="786" font-family="Arial" font-size="25" font-weight="700" fill="#1c2731" text-anchor="start">Text Reranker</text>
+<text x="338" y="850" font-family="Arial" font-size="25" font-weight="700" fill="#1c2731" text-anchor="start">BM25 + BGE</text>
+<circle cx="292" cy="728" r="14" fill="#de7626"/>
+<text x="327" y="722" font-family="Arial" font-size="25" font-weight="700" fill="#1c2731" text-anchor="start">Nemotron + BGE</text>
 <circle cx="420" cy="430" r="14" fill="#6D28D9"/>
-<text x="445" y="474" font-family="Arial" font-size="25" font-weight="700" fill="#1c2731" text-anchor="start">Fusion</text>
+<text x="445" y="494" font-family="Arial" font-size="25" font-weight="700" fill="#1c2731" text-anchor="start">Fusion</text>
 <circle cx="505" cy="361" r="14" fill="#1a569c"/>
 <text x="530" y="361" font-family="Arial" font-size="25" font-weight="700" fill="#1c2731" text-anchor="start">No Reranker</text>
-<circle cx="1090" cy="287" r="14" fill="#de7626"/>
-<text x="925" y="277" font-family="Arial" font-size="25" font-weight="700" fill="#1c2731" text-anchor="start">Adaptive Reranking</text>
 <circle cx="1445" cy="282" r="14" fill="#007934"/>
 <text x="1225" y="349" font-family="Arial" font-size="25" font-weight="700" fill="#1c2731" text-anchor="start">Multimodal Reranker</text>
 </svg>

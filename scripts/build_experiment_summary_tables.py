@@ -95,6 +95,8 @@ def clean_name(experiment: str) -> str:
         "image_text_input_308_nemotron_qwen3vl30b": "Nemotron image+text input + VL reranker + Qwen30B",
         "image_text_full_308_nemotron_qwen3vl30b": "Nemotron full image+text + VL reranker + Qwen30B",
         "image_text_full_308_nemotron_no_reranker_qwen3vl30b": "Nemotron full image+text no reranker + Qwen30B",
+        "image_text_full_308_nemotron_bge_reranker_large_qwen3vl30b": "Nemotron full image+text + BGE-reranker-large + Qwen30B",
+        "nemotron_image_bge_reranker_large_text_only_qwen3vl30b": "Nemotron image + BGE-reranker-large + Qwen30B text-only",
         "text_reranker_308_bge_base_qwen3vl30b": "BM25 + BGE-reranker-base + Qwen30B",
         "text_reranker_308_bge_large_qwen3vl30b": "BM25 + BGE-reranker-large + Qwen30B",
         "text_reranker_308_jina_qwen3vl30b": "BM25 + Jina reranker + Qwen30B",
@@ -109,6 +111,8 @@ def clean_name(experiment: str) -> str:
 
 def family(row: dict[str, object]) -> str:
     exp = str(row["experiment"])
+    if exp.startswith("nemotron_image_bge_reranker_large_text_only"):
+        return "Nemotron image text reranking"
     if exp.startswith("image_text_full"):
         return "Full image+text"
     if exp.startswith("image_text_input"):
@@ -186,6 +190,10 @@ def comment(row: dict[str, object]) -> str:
         return "Best overall result; text is used in reranker and VLM input."
     if exp == "image_text_full_308_nemotron_no_reranker_qwen3vl30b":
         return "Fast full image+text ablation; text remains in VLM input, reranker removed."
+    if exp == "image_text_full_308_nemotron_bge_reranker_large_qwen3vl30b":
+        return (
+            "Controlled text-reranking comparison: Nemotron candidates and VLM context are fixed."
+        )
     if exp == "image_text_fusion_308_nemotron_no_reranker_qwen3vl30b":
         return "Very fast; fusion partly compensates for removing image reranker."
     if exp == "image_text_fusion_308_nemotron_qwen3vl30b":

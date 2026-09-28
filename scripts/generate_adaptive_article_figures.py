@@ -17,6 +17,7 @@ DARK = "#1c2731"
 MUTED = "#5b6977"
 BLUE = "#1a569c"
 ORANGE = "#de7626"
+PURPLE = "#6D28D9"
 GREY = "#dfe5e8"
 GRID = "#e9eef1"
 WHITE = "#ffffff"
@@ -45,12 +46,13 @@ def save_svg(path: Path, width: int, height: int, body: list[str]):
 
 
 def draw_scatter_quality_latency():
-    png = OUT / "reranking_quality_latency_scatter.png"
-    svg = OUT / "reranking_quality_latency_scatter.svg"
+    png = OUT / "reranking_quality_latency_scatter_main.png"
+    svg = OUT / "reranking_quality_latency_scatter_main.svg"
     points = [
-        ("Text Reranker", 1.2344, 0.5497, MUTED),
+        ("BM25 + BGE", 1.2344, 0.5497, MUTED),
+        ("Nemotron + BGE", 1.1160, 0.5673, ORANGE),
+        ("Fusion", 2.5080, 0.6575, PURPLE),
         ("No Reranker", 3.4263, 0.6784, BLUE),
-        ("Adaptive Reranking", 9.7882, 0.7009, ORANGE),
         ("Multimodal Reranker", 13.6441, 0.7023, GREEN),
     ]
     w, h = 1800, 1150
@@ -134,9 +136,10 @@ def draw_scatter_quality_latency():
     body.append(svg_text(70, top + plot_h // 2, "Mean F1", 27, DARK, "700", "middle"))
 
     label_offsets = {
-        "Text Reranker": (25, -22),
+        "BM25 + BGE": (35, 42),
+        "Nemotron + BGE": (35, -28),
+        "Fusion": (25, 42),
         "No Reranker": (25, -22),
-        "Adaptive Reranking": (-165, -32),
         "Multimodal Reranker": (-220, 45),
     }
     for label, latency, f1, color in points:
@@ -254,13 +257,13 @@ def draw_adaptive_comparison():
 
 
 def draw_mean_f1_barplot():
-    png = OUT / "reranking_mean_f1_barplot.png"
-    svg = OUT / "reranking_mean_f1_barplot.svg"
+    png = OUT / "reranking_mean_f1_barplot_main.png"
+    svg = OUT / "reranking_mean_f1_barplot_main.svg"
     rows = [
         ("No Reranker", 0.6784, BLUE),
-        ("Text Reranker", 0.5497, MUTED),
+        ("BM25 + BGE", 0.5497, MUTED),
+        ("Nemotron + BGE", 0.5673, ORANGE),
         ("Multimodal Reranker", 0.7023, GREEN),
-        ("Adaptive Reranking", 0.7009, ORANGE),
     ]
     w, h = 1800, 1100
     left, top, plot_w, plot_h = 190, 190, 1400, 700
@@ -332,6 +335,5 @@ def draw_mean_f1_barplot():
 
 
 draw_scatter_quality_latency()
-draw_adaptive_comparison()
 draw_mean_f1_barplot()
 print("generated updated article figures in reports/figures")
