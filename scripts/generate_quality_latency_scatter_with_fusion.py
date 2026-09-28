@@ -48,8 +48,7 @@ def main() -> None:
     png = OUT / "reranking_quality_latency_scatter_main.png"
     svg = OUT / "reranking_quality_latency_scatter_main.svg"
     points = [
-        ("BM25 + BGE", 1.2344, 0.5497, MUTED),
-        ("Nemotron + BGE", 1.1160, 0.5673, ORANGE),
+        ("Text Reranker", 1.1160, 0.5674, ORANGE),
         ("Fusion", 2.5080, 0.6575, PURPLE),
         ("No Reranker", 3.4263, 0.6784, BLUE),
         ("Multimodal Reranker", 13.6441, 0.7023, GREEN),
@@ -123,8 +122,7 @@ def main() -> None:
     body.append(svg_text(70, top + plot_h // 2, "Mean F1", 27, DARK, "700", "middle"))
 
     label_offsets = {
-        "BM25 + BGE": (35, 42),
-        "Nemotron + BGE": (35, -28),
+        "Text Reranker": (35, -28),
         "Fusion": (25, 42),
         "No Reranker": (25, -22),
         "Multimodal Reranker": (-220, 45),

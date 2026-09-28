@@ -15,16 +15,14 @@
 <text x="405" y="229" font-family="Arial" font-size="25" font-weight="700" fill="#1c2731" text-anchor="middle">0.6784</text>
 <text x="405" y="935" font-family="Arial" font-size="22" font-weight="400" fill="#1c2731" text-anchor="middle">No</text>
 <text x="405" y="963" font-family="Arial" font-size="22" font-weight="400" fill="#1c2731" text-anchor="middle">Reranker</text>
-<rect x="640" y="377" width="190" height="513" fill="#5b6977"/>
-<text x="735" y="349" font-family="Arial" font-size="25" font-weight="700" fill="#1c2731" text-anchor="middle">0.5497</text>
-<text x="735" y="935" font-family="Arial" font-size="22" font-weight="400" fill="#1c2731" text-anchor="middle">BM25</text>
-<text x="735" y="963" font-family="Arial" font-size="22" font-weight="400" fill="#1c2731" text-anchor="middle">+</text>
-<text x="735" y="991" font-family="Arial" font-size="22" font-weight="400" fill="#1c2731" text-anchor="middle">BGE</text>
-<rect x="970" y="361" width="190" height="529" fill="#de7626"/>
-<text x="1065" y="333" font-family="Arial" font-size="25" font-weight="700" fill="#1c2731" text-anchor="middle">0.5673</text>
-<text x="1065" y="935" font-family="Arial" font-size="22" font-weight="400" fill="#1c2731" text-anchor="middle">Nemotron</text>
-<text x="1065" y="963" font-family="Arial" font-size="22" font-weight="400" fill="#1c2731" text-anchor="middle">+</text>
-<text x="1065" y="991" font-family="Arial" font-size="22" font-weight="400" fill="#1c2731" text-anchor="middle">BGE</text>
+<rect x="640" y="361" width="190" height="529" fill="#de7626"/>
+<text x="735" y="333" font-family="Arial" font-size="25" font-weight="700" fill="#1c2731" text-anchor="middle">0.5674</text>
+<text x="735" y="935" font-family="Arial" font-size="22" font-weight="400" fill="#1c2731" text-anchor="middle">Text</text>
+<text x="735" y="963" font-family="Arial" font-size="22" font-weight="400" fill="#1c2731" text-anchor="middle">Reranker</text>
+<rect x="970" y="256" width="190" height="634" fill="#6D28D9"/>
+<text x="1065" y="228" font-family="Arial" font-size="25" font-weight="700" fill="#1c2731" text-anchor="middle">0.6793</text>
+<text x="1065" y="935" font-family="Arial" font-size="22" font-weight="400" fill="#1c2731" text-anchor="middle">Fusion</text>
+<text x="1065" y="963" font-family="Arial" font-size="22" font-weight="400" fill="#1c2731" text-anchor="middle">Reranking</text>
 <rect x="1300" y="235" width="190" height="655" fill="#007934"/>
 <text x="1395" y="207" font-family="Arial" font-size="25" font-weight="700" fill="#1c2731" text-anchor="middle">0.7023</text>
 <text x="1395" y="935" font-family="Arial" font-size="22" font-weight="400" fill="#1c2731" text-anchor="middle">Multimodal</text>

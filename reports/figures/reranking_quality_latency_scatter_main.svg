@@ -33,10 +33,8 @@
 <line x1="190" y1="190" x2="190" y2="950" stroke="#1c2731" stroke-width="3"/>
 <text x="880" y="1072" font-family="Arial" font-size="27" font-weight="700" fill="#1c2731" text-anchor="middle">Средняя задержка (секунды)</text>
 <text x="70" y="570" font-family="Arial" font-size="27" font-weight="700" fill="#1c2731" text-anchor="middle">Mean F1</text>
-<circle cx="303" cy="786" r="14" fill="#5b6977"/>
-<text x="338" y="850" font-family="Arial" font-size="25" font-weight="700" fill="#1c2731" text-anchor="start">BM25 + BGE</text>
 <circle cx="292" cy="728" r="14" fill="#de7626"/>
-<text x="327" y="722" font-family="Arial" font-size="25" font-weight="700" fill="#1c2731" text-anchor="start">Nemotron + BGE</text>
+<text x="327" y="722" font-family="Arial" font-size="25" font-weight="700" fill="#1c2731" text-anchor="start">Text Reranker</text>
 <circle cx="420" cy="430" r="14" fill="#6D28D9"/>
 <text x="445" y="494" font-family="Arial" font-size="25" font-weight="700" fill="#1c2731" text-anchor="start">Fusion</text>
 <circle cx="505" cy="361" r="14" fill="#1a569c"/>
